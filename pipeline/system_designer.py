@@ -159,7 +159,12 @@ class SystemDesigner:
         
         for role in roles_data:
             name = role.get("name", "user") if isinstance(role, dict) else role
-            perms = ["create", "read", "update"] if name != "admin" else ["create", "read", "update", "delete", "admin"]
+            if name == "admin":
+                perms = ["create", "read", "update", "delete", "admin"]
+            elif name == "guest":
+                perms = ["read"]
+            else:
+                perms = ["create", "read", "update"]
             roles.append({
                 "name": name,
                 "permissions": perms
@@ -202,15 +207,22 @@ class SystemDesigner:
         
         for entity in entities:
             entity_name = entity["name"]
+            lower = entity_name.lower()
+            if lower.endswith("s"):
+                plural = lower
+            elif lower.endswith("y"):
+                plural = lower[:-1] + "ies"
+            else:
+                plural = lower + "s"
             pages.append({
                 "name": f"{entity_name} List",
-                "route": f"/{entity_name.lower()}s",
+                "route": f"/{plural}",
                 "allowed_roles": ["user", "admin"],
                 "components": ["Table", "SearchInput", "CreateButton"]
             })
             pages.append({
                 "name": f"{entity_name} Form",
-                "route": f"/{entity_name.lower()}s/new",
+                "route": f"/{plural}/new",
                 "allowed_roles": ["user", "admin"],
                 "components": ["Form", "SubmitButton"]
             })

@@ -96,7 +96,13 @@ class SchemaGenerator:
             
             schemas["db"]["tables"][name] = {"fields": table_fields}
             
-            plural = name.lower() + ("es" if name.lower().endswith("s") else "s")
+            lower_name = name.lower()
+            if lower_name.endswith("s"):
+                plural = lower_name
+            elif lower_name.endswith("y"):
+                plural = lower_name[:-1] + "ies"
+            else:
+                plural = lower_name + "s"
             schemas["api"]["endpoints"].extend([
                 {"path": f"/{plural}", "method": "GET", "roles": ["user", "admin"], "table": name},
                 {"path": f"/{plural}", "method": "POST", "roles": ["admin"], "table": name},

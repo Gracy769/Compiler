@@ -157,4 +157,35 @@ class Validator:
         if ui and not ui.get("routing"):
             errors.append("UI routing is empty - should have routes for all pages")
         
+        design = schemas.get("design", {}) if "design" in schemas else {}
+        features = design.get("features", []) + schemas.get("intent", {}).get("features", []) if "intent" in schemas else design.get("features", [])
+        features_lower = [f.lower() for f in features] if features else []
+        
+        db_tables = schemas.get("db", {}).get("tables", {})
+        
+        if any("premium" in f or "plan" in f or "billing" in f or "payment" in f for f in features_lower):
+            users_table = db_tables.get("Users", {})
+            if users_table:
+                fields = users_table.get("fields", {})
+                if "plan" not in fields and "subscription" not in fields and "tier" not in fields:
+                    errors.append("Premium/billing feature detected but Users table missing 'plan'/'subscription' field")
+        
+        if any("assign" in f or "task" in f for f in features_lower):
+            tasks_table = db_tables.get("Tasks", {}) or db_tables.get("tasks", {})
+            if tasks_table:
+                fields = tasks_table.get("fields", {})
+                has_assignee = any("assignee" in k.lower() for k in fields.keys())
+                if not has_assignee:
+                    errors.append("Task assignment mentioned but Tasks table has no assignee field")
+        
+        if any("real-time" in f or "websocket" in f or "live" in f for f in features_lower):
+            errors.append("Real-time updates requested but no WebSocket/SSE implementation. Consider polling fallback.")
+        
+        if any("public" in f and "login" in f for f in features_lower):
+            auth_roles = schemas.get("auth", {}).get("roles", {})
+            if "guest" in auth_roles:
+                guest_perms = auth_roles["guest"]
+                if "create" in guest_perms or "update" in guest_perms:
+                    errors.append("Public pages + login requirement: guest role should only have 'read' permission, not create/update")
+        
         return errors
