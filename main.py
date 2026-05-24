@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import logging, os
 
@@ -35,6 +36,10 @@ class CompileResponse(BaseModel):
     metrics: dict
     latency_ms: float
     stage_errors: list
+
+@app.get("/")
+async def root():
+    return FileResponse("www/index.html")
 
 @app.post("/compile", response_model=CompileResponse)
 async def compile_app(request: CompileRequest):
