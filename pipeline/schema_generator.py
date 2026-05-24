@@ -43,7 +43,7 @@ class SchemaGenerator:
         try:
             from pipeline.llm import call_llm
             messages = [{"role": "user", "content": f"Generate schemas:\n{json.dumps(system_design, indent=2)}"}]
-            raw = call_llm(messages, system=SCHEMA_GENERATION_PROMPT, temperature=0.05, model_tier="medium")
+            raw = call_llm(messages, system=SCHEMA_GENERATION_PROMPT, temperature=0.05, model_tier="fast")
             return self._parse_and_save(raw)
         except Exception as e:
             return self.generate_rule_based(system_design)

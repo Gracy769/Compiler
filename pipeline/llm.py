@@ -13,7 +13,7 @@ MODELS = {
 }
 
 MAX_TOKENS = {
-    "fast": 2048,
+    "fast": 4096,
     "medium": 4096,
     "slow": 16384
 }
