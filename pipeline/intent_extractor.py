@@ -49,11 +49,15 @@ class IntentExtractor:
     
     def extract_llm(self, prompt: str) -> Dict:
         try:
-            from pipeline.llm import call_llm
+            from pipeline.llm import generate_and_review
             
-            messages = [{"role": "user", "content": f"Extract intent:\n\n{prompt}"}]
-            
-            raw = call_llm(messages, system=INTENT_PROMPT, temperature=0.05, model_tier="deepseek", max_tokens=2048)
+            raw, was_reviewed = generate_and_review(
+                user_prompt=f"Extract intent:\n\n{prompt}",
+                system_prompt=INTENT_PROMPT,
+                review_task="Ensure app_name, app_type, features[], entities[], roles[], integrations[] are all present and valid",
+                max_tokens=4096
+            )
+            logger.info(f"Intent: reviewed={was_reviewed}")
             return self._parse_and_repair(raw)
         except Exception as e:
             logger.warning(f"LLM extraction failed: {e}, using rule-based")

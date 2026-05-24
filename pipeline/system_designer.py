@@ -65,12 +65,17 @@ Format:
 class SystemDesigner:
     def design_llm(self, intent: Dict) -> Dict:
         try:
-            from pipeline.llm import call_llm
+            from pipeline.llm import generate_and_review
             entity_names = [e.get("name") for e in intent.get("entities", [])]
-            roles_info = [f"{r.get('name')}: {r.get('permissions',[])}" for r in intent.get('roles', [])]
+            roles_info = ", ".join([f"{r.get('name')}({','.join(r.get('permissions',[]))})" for r in intent.get('roles', [])])
             
-            messages = [{"role": "user", "content": f"Design app architecture. Entities: {entity_names}. Roles: {roles_info}. App type: {intent.get('app_type')}. Output JSON only."}]
-            raw = call_llm(messages, system=SYSTEM_DESIGN_PROMPT, temperature=0.05, model_tier="deepseek")
+            raw, was_reviewed = generate_and_review(
+                user_prompt=f"Design architecture for: {intent.get('app_name', 'App')}\nEntities: {entity_names}\nRoles: {roles_info}\nApp type: {intent.get('app_type')}",
+                system_prompt=SYSTEM_DESIGN_PROMPT,
+                review_task="Ensure all entities have fields, roles have permissions, pages have routes and allowed_roles",
+                max_tokens=8192
+            )
+            logger.info(f"Design: reviewed={was_reviewed}")
             return self._parse_and_validate(raw)
         except Exception as e:
             return self.design_rule_based(intent)
