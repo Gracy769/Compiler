@@ -5,3 +5,4 @@ openai>=1.30.0
 jsonschema>=4.22.0
 python-dotenv>=1.0.1
 tenacity>=8.2.3
+json-repair>=0.25.0

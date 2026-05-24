@@ -51,11 +51,19 @@ class IntentExtractor:
     
     def extract_llm(self, prompt: str) -> Dict:
         try:
-            from pipeline.llm import call_llm
+            from pipeline.llm import call_llm_with_repair
             messages = [{"role": "user", "content": f"Extract intent:\n\n{prompt}"}]
-            raw = call_llm(messages, system=INTENT_PROMPT, temperature=0.05, model_tier="fast")
+            raw, was_repaired = call_llm_with_repair(
+                messages, 
+                system=INTENT_PROMPT, 
+                temperature=0.05, 
+                model_tier="fast",
+                schema=INTENT_SCHEMA
+            )
+            logger.info(f"Intent extraction: repaired={was_repaired}")
             return self._parse_and_repair(raw)
         except Exception as e:
+            logger.warning(f"LLM extraction failed: {e}, using rule-based")
             return self.extract_rule_based(prompt)
     
     def _parse_and_repair(self, raw: str) -> Dict:
