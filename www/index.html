@@ -61,10 +61,10 @@
                     <span id="statusBadge" class="badge" style="display: none;"></span>
                 </div>
                 <div class="tabs">
-                    <button class="tab active" onclick="showTab('intent')">Intent</button>
-                    <button class="tab" onclick="showTab('design')">Design</button>
-                    <button class="tab" onclick="showTab('schemas')">Schemas</button>
-                    <button class="tab" onclick="showTab('validation')">Validation</button>
+                    <button class="tab active" onclick="showTab('intent', event)">Intent</button>
+                    <button class="tab" onclick="showTab('design', event)">Design</button>
+                    <button class="tab" onclick="showTab('schemas', event)">Schemas</button>
+                    <button class="tab" onclick="showTab('validation', event)">Validation</button>
                 </div>
                 <div id="output" class="output">Output will appear here...</div>
                 <div id="stats" class="stats" style="display: none;">
@@ -118,9 +118,9 @@
             }
         }
         
-        function showTab(tab) {
+        function showTab(tab, evt) {
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            event.target.classList.add('active');
+            if (evt && evt.target) evt.target.classList.add('active');
             
             if (!currentData) return;
             
