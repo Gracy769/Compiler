@@ -142,8 +142,7 @@ Respond with ONLY the corrected JSON:"""
     review_messages = [{"role": "user", "content": "Fix this JSON if needed:"}]
     
     try:
-        corrected = _stream_response(review_messages, MODELS[review_model], 0.02, max_tokens, 
-                                      extra_params={"chat_template_kwargs": {"thinking": False}})
+        corrected = _stream_response(review_messages, MODELS[review_model], 0.02, max_tokens)
         corrected = repair_json(corrected)
         was_fixed = corrected.strip() != draft.strip()
         logger.info(f"Stage 2 complete: reviewed in {time.time()-t1:.1f}s, was_fixed={was_fixed}")

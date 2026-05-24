@@ -1,5 +1,7 @@
-import json, re
+import json, re, logging
 from typing import Dict, List, Any
+
+logger = logging.getLogger("ai-compiler")
 
 INTENT_SCHEMA = {
     "type": "object",

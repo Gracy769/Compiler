@@ -1,5 +1,7 @@
-import json
+import json, logging
 from typing import Dict, List
+
+logger = logging.getLogger("ai-compiler")
 
 SYSTEM_DESIGN_SCHEMA = {
     "type": "object",
