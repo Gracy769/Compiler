@@ -16,24 +16,17 @@ INTENT_SCHEMA = {
     }
 }
 
-INTENT_PROMPT = """You are Stage 1 of an AI application compiler — Intent Extractor.
+INTENT_PROMPT = """Extract intent from: {prompt}
 
-Parse the user's natural language description into a strict JSON structure.
-- Output ONLY raw JSON. No markdown, no explanation, no backticks.
-- Be exhaustive — extract every entity and feature mentioned.
-- app_type must be: crm, ecommerce, saas, dashboard, marketplace, or custom
+Respond with ONLY this JSON (no markdown):
+{"app_name":"Name","app_type":"crm|ecommerce|saas|dashboard|marketplace|custom","features":["Feature1","Feature2"],"entities":["entity1","entity2"],"roles":["admin","user"],"integrations":[],"ambiguities":[],"assumptions":[]}
 
-Output shape:
-{
-  "app_name": "string",
-  "app_type": "crm|ecommerce|saas|dashboard|marketplace|custom",
-  "features": ["list of features"],
-  "entities": ["list of data entities"],
-  "roles":    ["list of user roles"],
-  "integrations": ["third-party integrations"],
-  "ambiguities": ["things that are unclear"],
-  "assumptions": ["decisions made for underspecified input"]
-}"""
+Rules:
+- features: max 10 items, be specific
+- entities: data objects (user, product, order, etc)
+- roles: user roles (admin, customer, vendor, etc)
+- app_type: choose one from list
+- integrations: Stripe, SendGrid, Auth0, etc"""
 
 class IntentExtractor:
     def __init__(self):
@@ -45,25 +38,35 @@ class IntentExtractor:
             'ticket': 'tickets', 'article': 'articles', 'post': 'posts',
             'comment': 'comments', 'category': 'categories', 'tag': 'tags'
         }
-        self.app_types = {'crm', 'cms', 'erp', 'saas', 'ecommerce', 'blog', 'portal'}
-        self.role_keywords = {'admin': 'admin', 'administrator': 'admin', 'user': 'user', 'customer': 'customer', 'guest': 'guest', 'manager': 'manager'}
-        self.premium_keywords = ['premium', 'paid', 'subscription', 'billing', 'pricing']
+        self.role_keywords = {
+            'admin': 'admin', 'administrator': 'admin', 'user': 'user', 
+            'customer': 'customer', 'guest': 'guest', 'manager': 'manager',
+            'vendor': 'vendor', 'doctor': 'doctor', 'patient': 'patient'
+        }
+    
+    def extract(self, prompt: str) -> Dict[str, Any]:
+        return self.extract_llm(prompt)
     
     def extract_llm(self, prompt: str) -> Dict:
         try:
-            from pipeline.llm import call_llm_with_repair
+            from pipeline.llm import call_llm_with_review
+            
+            task = f"Extract app intent from user request: {prompt}"
+            
+            system_msg = INTENT_PROMPT.replace("{prompt}", prompt)
+            
             messages = [{"role": "user", "content": f"Extract intent:\n\n{prompt}"}]
-            raw, was_repaired = call_llm_with_repair(
-                messages, 
-                system=INTENT_PROMPT, 
-                temperature=0.05, 
-                model_tier="fast",
-                schema=INTENT_SCHEMA
+            
+            raw, was_reviewed = call_llm_with_review(
+                messages,
+                system=system_msg,
+                review_task="Ensure all required fields present, fix types, dedupe arrays"
             )
-            logger.info(f"Intent extraction: repaired={was_repaired}")
+            
+            logger.info(f"Intent extraction: reviewed={was_reviewed}")
             return self._parse_and_repair(raw)
         except Exception as e:
-            logger.warning(f"LLM extraction failed: {e}, using rule-based")
+            logger.warning(f"LLM failed: {e}, using rule-based")
             return self.extract_rule_based(prompt)
     
     def _parse_and_repair(self, raw: str) -> Dict:
@@ -89,9 +92,6 @@ class IntentExtractor:
         
         return data
     
-    def extract(self, prompt: str) -> Dict[str, Any]:
-        return self.extract_llm(prompt)
-    
     def extract_rule_based(self, prompt: str) -> Dict:
         prompt_lower = prompt.lower()
         entities = self._extract_entities(prompt_lower)
@@ -112,7 +112,7 @@ class IntentExtractor:
         }
         
         if len(roles) == 1:
-            intent["assumptions"].append("Single role detected - adding complementary role")
+            intent["assumptions"].append("Added complementary role")
             if roles[0]["name"] == "admin":
                 intent["roles"].append({"name": "user", "permissions": ["create", "read", "update"]})
             else:
@@ -146,7 +146,8 @@ class IntentExtractor:
         feature_keywords = {
             'login': 'Authentication', 'register': 'Registration', 'dashboard': 'Dashboard',
             'analytics': 'Analytics', 'payment': 'Payments', 'billing': 'Billing',
-            'search': 'Search', 'filter': 'Filtering', 'export': 'Export', 'import': 'Import'
+            'search': 'Search', 'filter': 'Filtering', 'export': 'Export', 'import': 'Import',
+            'chat': 'Chat', 'messaging': 'Messaging', 'notification': 'Notifications'
         }
         
         for keyword, feature in feature_keywords.items():
@@ -161,7 +162,8 @@ class IntentExtractor:
     def _detect_integrations(self, text: str) -> List[str]:
         integration_map = {
             'stripe': 'Stripe', 'payment': 'Stripe', 'email': 'SendGrid',
-            'sms': 'Twilio', 'auth': 'Auth0', 'analytics': 'Mixpanel'
+            'sms': 'Twilio', 'auth': 'Auth0', 'analytics': 'Mixpanel',
+            'slack': 'Slack', 'github': 'GitHub', 'google': 'Google OAuth'
         }
         return [name for key, name in integration_map.items() if key in text]
     
@@ -170,7 +172,7 @@ class IntentExtractor:
             'crm': ['crm', 'customer relationship', 'contacts', 'leads', 'deals'],
             'ecommerce': ['ecommerce', 'shop', 'store', 'cart', 'checkout'],
             'saas': ['saas', 'subscription', 'multi-tenant'],
-            'dashboard': ['dashboard', 'analytics', 'metrics'],
+            'dashboard': ['dashboard', 'analytics', 'metrics', 'reporting'],
             'marketplace': ['marketplace', 'vendor', 'seller']
         }
         for app_type, signatures in type_signatures.items():
@@ -179,5 +181,6 @@ class IntentExtractor:
         return 'custom'
     
     def _generate_app_name(self, prompt: str) -> str:
-        words = [w for w in prompt.split() if len(w) > 3 and w.lower() not in self.app_types][:3]
-        return ''.join(w.capitalize() for w in words) or 'MyApp'
+        words = [w for w in prompt.split() if len(w) > 3 and w.lower() not in 
+                ['crm', 'user', 'admin', 'build', 'create', 'make', 'with', 'that', 'this']]
+        return ''.join(w.capitalize() for w in words[:3]) or 'MyApp'

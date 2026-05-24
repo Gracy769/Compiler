@@ -57,29 +57,23 @@ SYSTEM_DESIGN_SCHEMA = {
     }
 }
 
-SYSTEM_DESIGN_PROMPT = """You are Stage 2 of an AI compiler — System Designer.
+SYSTEM_DESIGN_PROMPT = """Generate app architecture as JSON only. No explanation.
 
-Convert structured intent into complete app architecture.
-- Output ONLY raw JSON. No markdown.
-- Every entity must have realistic fields (id, created_at, updated_at).
-- Every role must have explicit permissions.
-- Every page must list allowed roles.
-
-Output:
-{
-  "entities": [{"name": "User", "fields": ["id:uuid", "email:string", "created_at:timestamp"], "relations": ["Profile via user_id"]}],
-  "flows": [{"name": "User Registration", "steps": ["POST /auth/register", "Validate email", "Create user", "Return JWT"], "actors": ["guest"]}],
-  "roles": [{"name": "admin", "permissions": ["users:read", "users:write", "users:delete"]}],
-  "permissions": {"users:read": ["admin", "manager"]},
-  "pages": [{"name": "Dashboard", "route": "/dashboard", "allowed_roles": ["admin", "user"], "components": ["StatsCard", "Table"]}]
-}"""
+Format:
+{"entities":[{"name":"EntityName","fields":["id:uuid","name:string","created_at:timestamp"],"relations":[]}],"flows":[{"name":"FlowName","steps":["step1","step2"],"actors":["role"]}],"roles":[{"name":"rolename","permissions":["read","write"]}],"permissions":{"permName":["role"]},"pages":[{"name":"PageName","route":"/route","allowed_roles":["role"],"components":["Component"]}]}"""
 
 class SystemDesigner:
     def design_llm(self, intent: Dict) -> Dict:
         try:
-            from pipeline.llm import call_llm
-            messages = [{"role": "user", "content": f"Design system:\n{json.dumps(intent, indent=2)}"}]
-            raw = call_llm(messages, system=SYSTEM_DESIGN_PROMPT, temperature=0.05, model_tier="medium")
+            from pipeline.llm import call_llm_with_review
+            messages = [{"role": "user", "content": f"Design system for: {intent.get('app_name', 'App')}\nEntities: {intent.get('entities', [])}\nRoles: {[r.get('name') for r in intent.get('roles', [])]}\nApp type: {intent.get('app_type')}"}]
+            
+            raw, was_reviewed = call_llm_with_review(
+                messages,
+                system=SYSTEM_DESIGN_PROMPT,
+                review_task="Ensure all entities have fields, all roles have permissions, all pages have routes"
+            )
+            logger.info(f"Design: reviewed={was_reviewed}")
             return self._parse_and_validate(raw)
         except Exception as e:
             return self.design_rule_based(intent)

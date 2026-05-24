@@ -1,5 +1,5 @@
 import time, logging, os, json, re
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Tuple
 
 logger = logging.getLogger("ai-compiler")
 
@@ -8,20 +8,22 @@ BASE_URL = "https://integrate.api.nvidia.com/v1"
 
 MODELS = {
     "fast": "meta/llama-3.1-8b-instruct",
-    "gemma": "google/gemma-2-2b-it",
-    "medium": "mistralai/mistral-7b-instruct-v0.3"
+    "review": "minimaxai/minimax-m2.7",
+    "gemma": "google/gemma-2-2b-it"
 }
 
 MAX_TOKENS = {
-    "fast": 4096,
-    "gemma": 2048,
-    "medium": 4096
+    "fast": 2048,
+    "review": 4096,
+    "gemma": 1536
 }
 
 MAX_RETRIES = 2
 RETRY_DELAY = 1
 
 _client = None
+
+from openai import OpenAI
 
 def _get_client():
     global _client
@@ -31,83 +33,90 @@ def _get_client():
         _client = OpenAI(base_url=BASE_URL, api_key=NVIDIA_API_KEY)
     return _client
 
-from openai import OpenAI
-
-def call_llm_with_repair(
-    messages: list,
-    system: str = "",
-    model_tier: str = "fast",
-    temperature: float = 0.05,
-    max_tokens: int = None,
-    schema: dict = None
-) -> Tuple[str, bool]:
-    """
-    Smart LLM call with JSON repair and validation.
-    Returns (output, was_repaired)
-    """
-    model = MODELS.get(model_tier, MODELS["fast"])
-    tokens = max_tokens or MAX_TOKENS.get(model_tier, 4096)
-    
-    full_messages = []
+def call_fast(prompt: str, system: str, max_tokens: int = 2048) -> str:
+    """Fast model call - generate initial output quickly"""
+    model = MODELS["fast"]
+    messages = [{"role": "user", "content": prompt}]
     if system:
-        full_messages.append({"role": "system", "content": system})
-    full_messages.extend(messages)
+        messages.insert(0, {"role": "system", "content": system})
     
-    last_error = None
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            t0 = time.time()
-            completion = _get_client().chat.completions.create(
-                model=model,
-                messages=full_messages,
-                temperature=max(temperature, 0.02),
-                top_p=0.9,
-                max_tokens=tokens,
-                stream=True
-            )
-            output = []
-            for chunk in completion:
-                if not getattr(chunk, "choices", None):
-                    continue
+    try:
+        t0 = time.time()
+        completion = _get_client().chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=0.05,
+            top_p=0.9,
+            max_tokens=max_tokens,
+            stream=True
+        )
+        output = []
+        for chunk in completion:
+            if getattr(chunk, "choices", None):
                 delta = chunk.choices[0].delta
-                if delta.content is not None:
+                if delta.content:
                     output.append(delta.content)
-            raw_text = "".join(output)
-            latency = round(time.time() - t0, 2)
-            logger.info(f"LLM OK | tier={model_tier} latency={latency}s chars={len(raw_text)}")
-            
-            if not raw_text.strip():
-                raise ValueError("Empty response from model")
-            
-            repaired_text = repair_json_output(raw_text)
-            
-            if schema:
-                from jsonschema import validate, ValidationError
-                try:
-                    data = json.loads(repaired_text)
-                    validate(instance=data, schema=schema)
-                    return repaired_text, False
-                except (json.JSONDecodeError, ValidationError) as e:
-                    logger.warning(f"Validation failed, attempting repair: {e}")
-                    repaired = repair_json_with_schema(repaired_text, schema)
-                    if repaired:
-                        return json.dumps(repaired), True
-            
-            return repaired_text, False
-            
-        except Exception as e:
-            last_error = str(e)
-            logger.warning(f"LLM attempt {attempt} failed: {e}")
-            if attempt < MAX_RETRIES:
-                time.sleep(RETRY_DELAY * attempt)
-    
-    raise RuntimeError(f"LLM failed after {MAX_RETRIES} attempts. Last error: {last_error}")
+        text = "".join(output)
+        logger.info(f"Fast model: {len(text)} chars in {time.time()-t0:.1f}s")
+        return text.strip()
+    except Exception as e:
+        logger.error(f"Fast model failed: {e}")
+        raise
 
-def repair_json_output(raw: str) -> str:
-    """Clean and repair potentially broken JSON from LLM"""
-    from json_repair import repair_json
+def call_review(draft: str, review_prompt: str, schema: dict = None) -> Tuple[str, bool]:
+    """
+    MiniMax reviews and corrects the draft JSON.
+    This is NOT regeneration - it's targeted correction.
+    Should be fast (~5-10s) since MiniMax just parses and fixes.
+    """
+    model = MODELS["review"]
     
-    text = raw.strip()
+    messages = [
+        {"role": "system", "content": f"""You are a JSON corrector. Your job is NOT to regenerate - only to fix errors.
+- Review the draft JSON below
+- Fix ONLY broken fields, missing values, wrong types
+- Keep correct parts AS-IS
+- Output ONLY the corrected JSON, no explanation
+
+REVIEW PROMPT: {review_prompt}
+
+DRAFT JSON TO CORRECT:
+{draft}
+
+OUTPUT: Only valid JSON, no markdown."""},
+        {"role": "user", "content": "Correct this JSON if needed:"}
+    ]
+    
+    try:
+        t0 = time.time()
+        completion = _get_client().chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=0.02,
+            top_p=0.85,
+            max_tokens=4096,
+            stream=True
+        )
+        output = []
+        for chunk in completion:
+            if getattr(chunk, "choices", None):
+                delta = chunk.choices[0].delta
+                if delta.content:
+                    output.append(delta.content)
+        text = "".join(output)
+        latency = time.time() - t0
+        logger.info(f"MiniMax review: {len(text)} chars in {latency:.1f}s")
+        
+        was_fixed = text.strip() != draft.strip()
+        return text.strip(), was_fixed
+        
+    except Exception as e:
+        logger.error(f"MiniMax review failed: {e}")
+        return draft, False
+
+def repair_json(text: str) -> str:
+    """Clean LLM output to valid JSON"""
+    text = text.strip()
     text = re.sub(r"```(?:json)?\s*", "", text).replace("```", "").strip()
     
     if not text.startswith("{"):
@@ -118,60 +127,9 @@ def repair_json_output(raw: str) -> str:
     try:
         json.loads(text)
         return text
-    except json.JSONDecodeError:
-        repaired = repair_json(text)
-        if repaired and len(repaired) > 0:
-            logger.info("JSON repaired by json-repair library")
-            return repaired
-        return text
-
-def repair_json_with_schema(text: str, schema: dict) -> Optional[dict]:
-    """Attempt to repair JSON to match schema"""
-    from jsonschema import validate, ValidationError
-    
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        from json_repair import repair_json
-        data = repair_json(text)
-        if not data:
-            return None
-    
-    required_fields = schema.get("required", [])
-    properties = schema.get("properties", {})
-    
-    for field in required_fields:
-        if field not in data:
-            if field in properties:
-                field_type = properties[field].get("type", "string")
-                if field_type == "string":
-                    data[field] = ""
-                elif field_type == "array":
-                    data[field] = []
-                elif field_type == "object":
-                    data[field] = {}
-                elif field_type == "integer":
-                    data[field] = 0
-                elif field_type == "boolean":
-                    data[field] = False
-    
-    for key, value in list(data.items()):
-        if key not in properties:
-            continue
-        prop_schema = properties[key]
-        expected_type = prop_schema.get("type")
-        
-        if expected_type == "array" and not isinstance(value, list):
-            data[key] = [value] if value else []
-        elif expected_type == "object" and not isinstance(value, dict):
-            data[key] = {"value": value} if value else {}
-    
-    try:
-        validate(instance=data, schema=schema)
-        return data
-    except ValidationError as e:
-        logger.warning(f"Schema repair failed: {e}")
-        return None
+    except:
+        from json_repair import repair_json as repair
+        return repair(text)
 
 def call_llm(
     messages: list,
@@ -180,6 +138,25 @@ def call_llm(
     temperature: float = 0.05,
     max_tokens: int = None
 ) -> str:
-    """Simple LLM call without repair (for backwards compatibility)"""
-    result, _ = call_llm_with_repair(messages, system, model_tier, temperature, max_tokens)
-    return result
+    """Legacy interface - use generate_and_review for better quality"""
+    return call_llm_with_review(messages, system, temperature, max_tokens)[0]
+
+def call_llm_with_review(
+    messages: list,
+    system: str = "",
+    temperature: float = 0.05,
+    max_tokens: int = None,
+    review_task: str = "Validate and fix JSON"
+) -> Tuple[str, bool]:
+    """
+    Two-stage: Fast generation + MiniMax review.
+    Returns (final_output, was_reviewed)
+    """
+    user_content = messages[-1]["content"] if messages else ""
+    
+    draft = call_fast(user_content, system, max_tokens or 2048)
+    repaired = repair_json(draft)
+    
+    corrected, was_fixed = call_review(repaired, review_task)
+    
+    return corrected, was_fixed

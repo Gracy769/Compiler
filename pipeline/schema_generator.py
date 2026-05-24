@@ -1,5 +1,7 @@
-import json, os
+import json, os, logging
 from typing import Dict
+
+logger = logging.getLogger("ai-compiler")
 
 SCHEMA_GENERATION_PROMPT = """You are Stage 3 of an AI compiler — Schema Generator.
 
@@ -41,11 +43,22 @@ class SchemaGenerator:
     
     def generate_llm(self, system_design: Dict) -> Dict:
         try:
-            from pipeline.llm import call_llm
-            messages = [{"role": "user", "content": f"Generate schemas:\n{json.dumps(system_design, indent=2)}"}]
-            raw = call_llm(messages, system=SCHEMA_GENERATION_PROMPT, temperature=0.05, model_tier="medium")
+            from pipeline.llm import call_llm_with_review
+            entity_names = [e.get("name") for e in system_design.get("entities", [])]
+            roles = system_design.get("roles", [])
+            pages = system_design.get("pages", [])
+            
+            messages = [{"role": "user", "content": f"Generate schemas for: {entity_names}"}]
+            
+            raw, was_reviewed = call_llm_with_review(
+                messages,
+                system=SCHEMA_GENERATION_PROMPT,
+                review_task="Ensure db tables have fields, api has CRUD endpoints, ui has pages and routing"
+            )
+            logger.info(f"Schema: reviewed={was_reviewed}")
             return self._parse_and_save(raw)
         except Exception as e:
+            logger.warning(f"LLM schema failed: {e}, using rule-based")
             return self.generate_rule_based(system_design)
     
     def _parse_and_save(self, raw: str) -> Dict:
