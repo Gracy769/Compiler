@@ -6,9 +6,9 @@ logger = logging.getLogger("ai-compiler")
 NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY")
 BASE_URL       = "https://integrate.api.nvidia.com/v1"
 MODEL          = "minimaxai/minimax-m2.7"
-MAX_TOKENS     = 8192
-MAX_RETRIES    = 3
-RETRY_DELAY    = 2
+MAX_TOKENS     = 16384
+MAX_RETRIES    = 5
+RETRY_DELAY    = 4
 
 _client = None
 
@@ -23,7 +23,7 @@ def _get_client():
 def call_llm(
     messages: list,
     system: str = "",
-    temperature: float = 0.1,
+    temperature: float = 0.05,
     max_tokens: int = MAX_TOKENS
 ) -> str:
     full_messages = []
@@ -37,7 +37,7 @@ def call_llm(
             t0 = time.time()
             completion = _get_client().chat.completions.create(
                 model=MODEL, messages=full_messages, temperature=max(temperature, 0.01),
-                top_p=0.95, max_tokens=max_tokens, stream=True
+                top_p=0.9, max_tokens=max_tokens, stream=True
             )
             output = []
             for chunk in completion:
