@@ -47,7 +47,7 @@ class SchemaGenerator:
             entity_names = [e.get("name") for e in system_design.get("entities", [])]
             
             messages = [{"role": "user", "content": f"Generate DB/API/UI/Auth schemas for: {entity_names}"}]
-            raw = call_llm(messages, system=SCHEMA_GENERATION_PROMPT, temperature=0.05, model_tier="fast")
+            raw = call_llm(messages, system=SCHEMA_GENERATION_PROMPT, temperature=0.05, model_tier="deepseek")
             return self._parse_and_save(raw)
         except Exception as e:
             logger.warning(f"LLM schema failed: {e}, using rule-based")

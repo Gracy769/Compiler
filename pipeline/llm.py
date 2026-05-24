@@ -1,5 +1,6 @@
 import time, logging, os, json, re
 from typing import Dict, Any, Tuple
+from openai import OpenAI
 
 logger = logging.getLogger("ai-compiler")
 
@@ -7,23 +8,23 @@ NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY")
 BASE_URL = "https://integrate.api.nvidia.com/v1"
 
 MODELS = {
+    "deepseek": "deepseek-ai/deepseek-v4-flash",
     "fast": "meta/llama-3.1-8b-instruct",
-    "review": "minimaxai/minimax-m2.7",
-    "gemma": "google/gemma-2-2b-it"
+    "gemma": "google/gemma-2-2b-it",
+    "mistral": "mistralai/mistral-7b-instruct-v0.3"
 }
 
 MAX_TOKENS = {
+    "deepseek": 8192,
     "fast": 2048,
-    "review": 4096,
-    "gemma": 1536
+    "gemma": 1536,
+    "mistral": 4096
 }
 
-MAX_RETRIES = 2
+MAX_RETRIES = 3
 RETRY_DELAY = 1
 
 _client = None
-
-from openai import OpenAI
 
 def _get_client():
     global _client
@@ -33,89 +34,73 @@ def _get_client():
         _client = OpenAI(base_url=BASE_URL, api_key=NVIDIA_API_KEY)
     return _client
 
-def call_fast(prompt: str, system: str, max_tokens: int = 2048) -> str:
-    """Fast model call - generate initial output quickly"""
-    model = MODELS["fast"]
-    messages = [{"role": "user", "content": prompt}]
+def call_llm(
+    messages: list,
+    system: str = "",
+    model_tier: str = "deepseek",
+    temperature: float = 0.05,
+    max_tokens: int = None,
+    extra_params: dict = None
+) -> str:
+    """
+    Call LLM with specified model.
+    Use 'deepseek' for best quality, 'fast' for quick generation.
+    """
+    model = MODELS.get(model_tier, MODELS["deepseek"])
+    tokens = max_tokens or MAX_TOKENS.get(model_tier, 4096)
+    
+    full_messages = []
     if system:
-        messages.insert(0, {"role": "system", "content": system})
+        full_messages.append({"role": "system", "content": system})
+    full_messages.extend(messages)
     
-    try:
-        t0 = time.time()
-        completion = _get_client().chat.completions.create(
-            model=model,
-            messages=messages,
-            temperature=0.05,
-            top_p=0.9,
-            max_tokens=max_tokens,
-            stream=True
-        )
-        output = []
-        for chunk in completion:
-            if getattr(chunk, "choices", None):
+    request_params = {
+        "model": model,
+        "messages": full_messages,
+        "temperature": max(temperature, 0.01),
+        "top_p": 0.9,
+        "max_tokens": tokens,
+        "stream": True
+    }
+    
+    if model_tier == "deepseek" and extra_params:
+        request_params.update(extra_params)
+    
+    last_error = None
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            t0 = time.time()
+            completion = _get_client().chat.completions.create(**request_params)
+            
+            output = []
+            for chunk in completion:
+                if not getattr(chunk, "choices", None):
+                    continue
                 delta = chunk.choices[0].delta
-                if delta.content:
+                if delta.content is not None:
                     output.append(delta.content)
-        text = "".join(output)
-        logger.info(f"Fast model: {len(text)} chars in {time.time()-t0:.1f}s")
-        return text.strip()
-    except Exception as e:
-        logger.error(f"Fast model failed: {e}")
-        raise
-
-def call_review(draft: str, review_prompt: str, schema: dict = None) -> Tuple[str, bool]:
-    """
-    MiniMax reviews and corrects the draft JSON.
-    This is NOT regeneration - it's targeted correction.
-    Should be fast (~5-10s) since MiniMax just parses and fixes.
-    """
-    model = MODELS["review"]
+            
+            text = "".join(output)
+            latency = time.time() - t0
+            logger.info(f"LLM OK | model={model_tier} latency={latency:.1f}s chars={len(text)}")
+            
+            if not text.strip():
+                raise ValueError("Empty response")
+            
+            return text.strip()
+            
+        except Exception as e:
+            last_error = str(e)
+            logger.warning(f"LLM attempt {attempt} failed: {e}")
+            if attempt < MAX_RETRIES:
+                time.sleep(RETRY_DELAY * attempt)
     
-    messages = [
-        {"role": "system", "content": f"""You are a JSON corrector. Your job is NOT to regenerate - only to fix errors.
-- Review the draft JSON below
-- Fix ONLY broken fields, missing values, wrong types
-- Keep correct parts AS-IS
-- Output ONLY the corrected JSON, no explanation
-
-REVIEW PROMPT: {review_prompt}
-
-DRAFT JSON TO CORRECT:
-{draft}
-
-OUTPUT: Only valid JSON, no markdown."""},
-        {"role": "user", "content": "Correct this JSON if needed:"}
-    ]
-    
-    try:
-        t0 = time.time()
-        completion = _get_client().chat.completions.create(
-            model=model,
-            messages=messages,
-            temperature=0.02,
-            top_p=0.85,
-            max_tokens=4096,
-            stream=True
-        )
-        output = []
-        for chunk in completion:
-            if getattr(chunk, "choices", None):
-                delta = chunk.choices[0].delta
-                if delta.content:
-                    output.append(delta.content)
-        text = "".join(output)
-        latency = time.time() - t0
-        logger.info(f"MiniMax review: {len(text)} chars in {latency:.1f}s")
-        
-        was_fixed = text.strip() != draft.strip()
-        return text.strip(), was_fixed
-        
-    except Exception as e:
-        logger.error(f"MiniMax review failed: {e}")
-        return draft, False
+    raise RuntimeError(f"LLM failed after {MAX_RETRIES} attempts. Last error: {last_error}")
 
 def repair_json(text: str) -> str:
     """Clean LLM output to valid JSON"""
+    from json_repair import repair_json as repair
+    
     text = text.strip()
     text = re.sub(r"```(?:json)?\s*", "", text).replace("```", "").strip()
     
@@ -128,35 +113,5 @@ def repair_json(text: str) -> str:
         json.loads(text)
         return text
     except:
-        from json_repair import repair_json as repair
-        return repair(text)
-
-def call_llm(
-    messages: list,
-    system: str = "",
-    model_tier: str = "fast",
-    temperature: float = 0.05,
-    max_tokens: int = None
-) -> str:
-    """Legacy interface - use generate_and_review for better quality"""
-    return call_llm_with_review(messages, system, temperature, max_tokens)[0]
-
-def call_llm_with_review(
-    messages: list,
-    system: str = "",
-    temperature: float = 0.05,
-    max_tokens: int = None,
-    review_task: str = "Validate and fix JSON"
-) -> Tuple[str, bool]:
-    """
-    Two-stage: Fast generation + MiniMax review.
-    Returns (final_output, was_reviewed)
-    """
-    user_content = messages[-1]["content"] if messages else ""
-    
-    draft = call_fast(user_content, system, max_tokens or 2048)
-    repaired = repair_json(draft)
-    
-    corrected, was_fixed = call_review(repaired, review_task)
-    
-    return corrected, was_fixed
+        repaired = repair(text)
+        return repaired if repaired else text

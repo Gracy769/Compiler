@@ -70,7 +70,7 @@ class SystemDesigner:
             roles_info = [f"{r.get('name')}: {r.get('permissions',[])}" for r in intent.get('roles', [])]
             
             messages = [{"role": "user", "content": f"Design app architecture. Entities: {entity_names}. Roles: {roles_info}. App type: {intent.get('app_type')}. Output JSON only."}]
-            raw = call_llm(messages, system=SYSTEM_DESIGN_PROMPT, temperature=0.05, model_tier="fast")
+            raw = call_llm(messages, system=SYSTEM_DESIGN_PROMPT, temperature=0.05, model_tier="deepseek")
             return self._parse_and_validate(raw)
         except Exception as e:
             return self.design_rule_based(intent)

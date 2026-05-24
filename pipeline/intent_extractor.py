@@ -53,7 +53,7 @@ class IntentExtractor:
             
             messages = [{"role": "user", "content": f"Extract intent:\n\n{prompt}"}]
             
-            raw = call_llm(messages, system=INTENT_PROMPT, temperature=0.05, model_tier="fast", max_tokens=1024)
+            raw = call_llm(messages, system=INTENT_PROMPT, temperature=0.05, model_tier="deepseek", max_tokens=2048)
             return self._parse_and_repair(raw)
         except Exception as e:
             logger.warning(f"LLM extraction failed: {e}, using rule-based")
