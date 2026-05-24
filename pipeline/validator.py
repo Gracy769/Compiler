@@ -116,7 +116,7 @@ class Validator:
         errors = []
         design_entities = {e["name"].lower(): e for e in design.get("entities", [])}
         
-        if "entities" in schemas:
+        if "entities" in schemas and isinstance(schemas.get("entities"), dict):
             schema_entities = {k.lower(): v for k, v in schemas.get("entities", {}).items()}
             for name, entity in design_entities.items():
                 if name in schema_entities:
@@ -127,9 +127,17 @@ class Validator:
                     if missing:
                         errors.append(f"Entity '{name}': fields in design but not schema: {missing}")
         
+        if not isinstance(design.get("roles"), list):
+            errors.append("Design roles is not a list")
+            return errors
+        
         for role in design.get("roles", []):
+            if not isinstance(role, dict):
+                continue
             role_name = role.get("name", "")
             for page in design.get("pages", []):
+                if not isinstance(page, dict):
+                    continue
                 allowed = page.get("allowed_roles", [])
                 if role_name in allowed:
                     perms = role.get("permissions", [])
