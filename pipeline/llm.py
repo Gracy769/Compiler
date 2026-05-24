@@ -19,8 +19,8 @@ MAX_TOKENS = {
     "fast": 4096,
     "deepseek": 16384,
     "gemma": 2048,
-    "mistral": 8192,
-    "minimax": 8192
+    "mistral": 16384,
+    "minimax": 16384
 }
 
 MAX_RETRIES = 2
@@ -96,7 +96,7 @@ def generate_and_review(
     user_prompt: str,
     system_prompt: str,
     review_task: str = "Fix any errors in this JSON",
-    max_tokens: int = 8192
+    max_tokens: int = 16384
 ) -> Tuple[str, bool]:
     """
     Two-stage: Fast generation + MiniMax review/correct.
