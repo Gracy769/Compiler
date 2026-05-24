@@ -1,0 +1,24 @@
+{
+  "fields": {
+    "id": {
+      "type": "uuid",
+      "primary_key": true
+    },
+    "customer_id": {
+      "type": "uuid",
+      "primary_key": false
+    },
+    "total": {
+      "type": "float",
+      "primary_key": false
+    },
+    "status": {
+      "type": "enum",
+      "primary_key": false
+    },
+    "created_at": {
+      "type": "timestamp",
+      "primary_key": false
+    }
+  }
+}

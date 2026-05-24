@@ -1,0 +1,28 @@
+{
+  "fields": {
+    "id": {
+      "type": "uuid",
+      "primary_key": true
+    },
+    "name": {
+      "type": "string",
+      "primary_key": false
+    },
+    "description": {
+      "type": "text",
+      "primary_key": false
+    },
+    "price": {
+      "type": "float",
+      "primary_key": false
+    },
+    "stock": {
+      "type": "integer",
+      "primary_key": false
+    },
+    "created_at": {
+      "type": "timestamp",
+      "primary_key": false
+    }
+  }
+}

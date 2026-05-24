@@ -1,0 +1,46 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["pages"],
+  "properties": {
+    "pages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "route", "components"],
+        "properties": {
+          "name": {"type": "string"},
+          "route": {"type": "string"},
+          "layout": {"type": "string"},
+          "access": {"type": "array", "items": {"type": "string"}},
+          "premium": {"type": "boolean"},
+          "components": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["type", "field"],
+              "properties": {
+                "type": {"type": "string", "enum": ["input", "table", "form", "button", "card", "modal", "chart", "list", "dropdown", "calendar", "file_upload"]},
+                "field": {"type": "string"},
+                "label": {"type": "string"},
+                "entity": {"type": "string"},
+                "api_endpoint": {"type": "string"},
+                "method": {"type": "string", "enum": ["GET", "POST", "PUT", "DELETE", "PATCH"]},
+                "validation": {
+                  "type": "object",
+                  "properties": {
+                    "required": {"type": "boolean"},
+                    "min": {"type": "number"},
+                    "max": {"type": "number"},
+                    "pattern": {"type": "string"}
+                  }
+                },
+                "config": {"type": "object"}
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

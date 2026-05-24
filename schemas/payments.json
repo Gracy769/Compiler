@@ -1,0 +1,28 @@
+{
+  "fields": {
+    "id": {
+      "type": "uuid",
+      "primary_key": true
+    },
+    "order_id": {
+      "type": "uuid",
+      "primary_key": false
+    },
+    "amount": {
+      "type": "float",
+      "primary_key": false
+    },
+    "method": {
+      "type": "string",
+      "primary_key": false
+    },
+    "status": {
+      "type": "enum",
+      "primary_key": false
+    },
+    "created_at": {
+      "type": "timestamp",
+      "primary_key": false
+    }
+  }
+}

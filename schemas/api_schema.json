@@ -1,0 +1,46 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["endpoints"],
+  "properties": {
+    "endpoints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "method", "entity"],
+        "properties": {
+          "path": {"type": "string"},
+          "method": {"type": "string", "enum": ["GET", "POST", "PUT", "DELETE", "PATCH"]},
+          "entity": {"type": "string"},
+          "access": {"type": "array", "items": {"type": "string"}},
+          "premium": {"type": "boolean"},
+          "request": {
+            "type": "object",
+            "properties": {
+              "body": {"type": "array", "items": {"type": "string"}},
+              "params": {"type": "array", "items": {"type": "string"}},
+              "query": {"type": "array", "items": {"type": "string"}}
+            }
+          },
+          "response": {
+            "type": "object",
+            "properties": {
+              "success": {"type": "object", "properties": {"fields": {"type": "array", "items": {"type": "string"}}}},
+              "error": {"type": "array", "items": {"type": "string"}}
+            }
+          },
+          "validation": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {"type": "string"},
+                "rules": {"type": "array", "items": {"type": "string"}}
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "fields": {
+    "id": {
+      "type": "uuid",
+      "primary_key": true
+    },
+    "email": {
+      "type": "string",
+      "primary_key": false
+    },
+    "password_hash": {
+      "type": "string",
+      "primary_key": false
+    },
+    "role": {
+      "type": "enum",
+      "primary_key": false
+    },
+    "created_at": {
+      "type": "timestamp",
+      "primary_key": false
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "fields": {
+    "id": {
+      "type": "uuid",
+      "primary_key": true
+    },
+    "name": {
+      "type": "string",
+      "primary_key": false
+    },
+    "created_at": {
+      "type": "timestamp",
+      "primary_key": false
+    }
+  }
+}

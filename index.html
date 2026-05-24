@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Software Generator Compiler</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f0f1e; color: #fff; min-height: 100vh; }
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+        h1 { color: #8b5cf6; margin-bottom: 10px; font-size: 2rem; }
+        .subtitle { color: #9ca3af; margin-bottom: 30px; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        .panel { background: #1a1a2e; border-radius: 12px; padding: 20px; border: 1px solid #2d2d4a; }
+        .panel h2 { color: #a78bfa; margin-bottom: 15px; font-size: 1.1rem; }
+        textarea { width: 100%; height: 150px; background: #0f0f1e; border: 1px solid #2d2d4a; border-radius: 8px; color: #fff; padding: 15px; font-family: monospace; font-size: 14px; resize: vertical; }
+        textarea:focus { outline: none; border-color: #8b5cf6; }
+        button { background: #8b5cf6; color: white; border: none; padding: 12px 24px; border-radius: 8px; cursor: pointer; font-weight: 600; width: 100%; margin-top: 10px; transition: background 0.2s; }
+        button:hover { background: #7c3aed; }
+        button:disabled { background: #4c1d95; cursor: not-allowed; }
+        .output { height: 400px; overflow: auto; background: #0f0f1e; border-radius: 8px; padding: 15px; font-family: monospace; font-size: 12px; white-space: pre-wrap; word-wrap: break-word; }
+        .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-top: 20px; }
+        .metric { background: #1a1a2e; padding: 15px; border-radius: 8px; text-align: center; border: 1px solid #2d2d4a; }
+        .metric-value { font-size: 1.5rem; color: #8b5cf6; font-weight: bold; }
+        .metric-label { color: #9ca3af; font-size: 0.8rem; margin-top: 5px; }
+        .error { color: #ef4444; }
+        .success { color: #22c55e; }
+        .tabs { display: flex; gap: 10px; margin-bottom: 10px; }
+        .tab { padding: 8px 16px; background: #0f0f1e; border: 1px solid #2d2d4a; border-radius: 6px; cursor: pointer; font-size: 0.9rem; }
+        .tab.active { background: #8b5cf6; border-color: #8b5cf6; }
+        .tab:hover:not(.active) { border-color: #8b5cf6; }
+        pre { margin: 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Software Generation Compiler</h1>
+        <p class="subtitle">Natural Language → Structured Config → Validated → Executable</p>
+        
+        <div class="grid">
+            <div class="panel">
+                <h2>Input Prompt</h2>
+                <textarea id="prompt" placeholder="Describe your application...&#10;&#10;Example: Build a CRM with login, contacts, dashboard, role-based access, and premium plan with payments. Admins can see analytics."></textarea>
+                <button id="generate" onclick="generate()">Generate Application Schema</button>
+            </div>
+            <div class="panel">
+                <h2>Generated Output</h2>
+                <div class="tabs">
+                    <div class="tab active" onclick="showTab('intent')">Intent</div>
+                    <div class="tab" onclick="showTab('schemas')">Schemas</div>
+                    <div class="tab" onclick="showTab('validation')">Validation</div>
+                </div>
+                <div class="output" id="output">Generated output will appear here...</div>
+            </div>
+        </div>
+        
+        <div class="metrics">
+            <div class="metric">
+                <div class="metric-value" id="requests">0</div>
+                <div class="metric-label">Total Requests</div>
+            </div>
+            <div class="metric">
+                <div class="metric-value" id="success">0</div>
+                <div class="metric-label">Successful</div>
+            </div>
+            <div class="metric">
+                <div class="metric-value" id="latency">0ms</div>
+                <div class="metric-label">Avg Latency</div>
+            </div>
+            <div class="metric">
+                <div class="metric-value" id="entities">0</div>
+                <div class="metric-label">Avg Entities</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let metrics = { requests: 0, success: 0, totalLatency: 0 };
+        
+        async function generate() {
+            const prompt = document.getElementById('prompt').value;
+            const btn = document.getElementById('generate');
+            const output = document.getElementById('output');
+            
+            if (!prompt.trim()) {
+                output.innerHTML = '<span class="error">Please enter a prompt</span>';
+                return;
+            }
+            
+            btn.disabled = true;
+            btn.textContent = 'Generating...';
+            output.textContent = 'Processing...';
+            
+            try {
+                const response = await fetch('/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompt })
+                });
+                
+                const data = await response.json();
+                
+                metrics.requests++;
+                if (data.valid) metrics.success++;
+                metrics.totalLatency += data.output.latency_seconds || 0;
+                
+                updateMetrics();
+                
+                if (data.valid) {
+                    showData(data.output);
+                } else {
+                    output.innerHTML = `<span class="error">Validation Failed</span>\n\n${JSON.stringify(data.output.validation_report, null, 2)}`;
+                }
+            } catch (err) {
+                output.innerHTML = `<span class="error">Error: ${err.message}</span>`;
+            }
+            
+            btn.disabled = false;
+            btn.textContent = 'Generate Application Schema';
+        }
+        
+        function showData(output) {
+            const intent = output.intent;
+            const schemas = output.schemas;
+            
+            document.getElementById('output').innerHTML = `
+<span class="success">✓ Valid Schema Generated</span>
+
+<span style="color: #a78bfa">=== INTENT ===</span>
+Entities: ${intent.entities.map(e => e.name).join(', ')}
+Roles: ${intent.roles.map(r => r.name).join(', ')}
+Features: ${intent.features.length}
+Assumptions: ${intent.assumptions.length}
+
+<span style="color: #a78bfa">=== SCHEMAS ===</span>
+Pages (${schemas.ui.pages.length}): ${schemas.ui.pages.map(p => p.route).join(', ')}
+Endpoints (${schemas.api.endpoints.length})
+Tables (${schemas.db.tables.length}): ${schemas.db.tables.map(t => t.name).join(', ')}
+
+<span style="color: #a78bfa">=== METADATA ===</span>
+Latency: ${(output.latency_seconds * 1000).toFixed(1)}ms
+Pipeline: ${output.metadata.pipeline_version}
+            `;
+        }
+        
+        function showTab(tab) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            event.target.classList.add('active');
+        }
+        
+        function updateMetrics() {
+            document.getElementById('requests').textContent = metrics.requests;
+            document.getElementById('success').textContent = metrics.success;
+            document.getElementById('latency').textContent = 
+                metrics.requests > 0 ? `${(metrics.totalLatency / metrics.requests * 1000).toFixed(0)}ms` : '0ms';
+        }
+        
+        document.getElementById('prompt').value = 'Build a CRM with login, contacts, dashboard, role-based access, and premium plan with payments. Admins can see analytics.';
+    </script>
+</body>
+</html>

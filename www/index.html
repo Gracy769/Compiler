@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Compiler</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+        .container { max-width: 1400px; margin: 0 auto; padding: 2rem; }
+        header { text-align: center; margin-bottom: 2rem; }
+        h1 { font-size: 2.5rem; background: linear-gradient(135deg, #6366f1, #a855f7); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 0.5rem; }
+        .subtitle { color: #64748b; }
+        .main-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; }
+        .panel { background: #1e293b; border-radius: 12px; padding: 1.5rem; border: 1px solid #334155; }
+        .panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; padding-bottom: 1rem; border-bottom: 1px solid #334155; }
+        .panel-title { font-size: 1.1rem; font-weight: 600; color: #f1f5f9; }
+        .badge { background: #6366f1; color: white; padding: 0.25rem 0.75rem; border-radius: 999px; font-size: 0.75rem; }
+        textarea { width: 100%; height: 200px; background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 1rem; color: #e2e8f0; font-family: inherit; font-size: 0.9rem; resize: vertical; }
+        textarea:focus { outline: none; border-color: #6366f1; }
+        button { background: linear-gradient(135deg, #6366f1, #a855f7); color: white; border: none; padding: 0.75rem 2rem; border-radius: 8px; font-size: 1rem; font-weight: 600; cursor: pointer; transition: opacity 0.2s; }
+        button:hover { opacity: 0.9; }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        .output { background: #0f172a; border-radius: 8px; padding: 1rem; font-family: 'Monaco', 'Menlo', monospace; font-size: 0.8rem; max-height: 500px; overflow: auto; white-space: pre-wrap; color: #94a3b8; }
+        .tabs { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+        .tab { background: #334155; padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; font-size: 0.85rem; border: none; color: #94a3b8; }
+        .tab.active { background: #6366f1; color: white; }
+        .stats { display: flex; gap: 1.5rem; margin-top: 1rem; }
+        .stat { text-align: center; }
+        .stat-value { font-size: 1.5rem; font-weight: 700; color: #6366f1; }
+        .stat-label { font-size: 0.75rem; color: #64748b; text-transform: uppercase; }
+        .error { color: #ef4444; }
+        .success { color: #22c55e; }
+        @media (max-width: 900px) { .main-grid { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>AI Application Compiler</h1>
+            <p class="subtitle">Transform natural language into production-ready application blueprints</p>
+        </header>
+        
+        <div class="main-grid">
+            <div class="panel">
+                <div class="panel-header">
+                    <span class="panel-title">Describe Your Application</span>
+                </div>
+                <textarea id="prompt" placeholder="e.g., Build a CRM for managing contacts and deals with user authentication..."></textarea>
+                <div style="margin-top: 1rem; display: flex; justify-content: space-between; align-items: center;">
+                    <label style="display: flex; align-items: center; gap: 0.5rem; color: #94a3b8; font-size: 0.9rem;">
+                        <input type="checkbox" id="use_llm" checked> Use AI (NVIDIA)
+                    </label>
+                    <button id="compileBtn" onclick="compileApp()">Compile</button>
+                </div>
+            </div>
+            
+            <div class="panel">
+                <div class="panel-header">
+                    <span class="panel-title">Generated Blueprint</span>
+                    <span id="statusBadge" class="badge" style="display: none;"></span>
+                </div>
+                <div class="tabs">
+                    <button class="tab active" onclick="showTab('intent')">Intent</button>
+                    <button class="tab" onclick="showTab('design')">Design</button>
+                    <button class="tab" onclick="showTab('schemas')">Schemas</button>
+                    <button class="tab" onclick="showTab('validation')">Validation</button>
+                </div>
+                <div id="output" class="output">Output will appear here...</div>
+                <div id="stats" class="stats" style="display: none;">
+                    <div class="stat"><div id="latency" class="stat-value">-</div><div class="stat-label">Latency (ms)</div></div>
+                    <div class="stat"><div id="entities" class="stat-value">-</div><div class="stat-label">Entities</div></div>
+                    <div class="stat"><div id="pages" class="stat-value">-</div><div class="stat-label">Pages</div></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        let currentData = null;
+        
+        async function compileApp() {
+            const btn = document.getElementById('compileBtn');
+            const prompt = document.getElementById('prompt').value.trim();
+            const use_llm = document.getElementById('use_llm').checked;
+            
+            if (!prompt) { alert('Please enter a description'); return; }
+            
+            btn.disabled = true;
+            btn.textContent = 'Compiling...';
+            document.getElementById('statusBadge').style.display = 'none';
+            
+            try {
+                const res = await fetch('/compile', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompt, use_llm })
+                });
+                
+                if (!res.ok) throw new Error(await res.text());
+                currentData = await res.json();
+                
+                document.getElementById('statusBadge').style.display = 'inline';
+                document.getElementById('statusBadge').textContent = currentData.success ? 'Success' : 'Failed';
+                document.getElementById('statusBadge').className = `badge ${currentData.success ? 'success' : 'error'}`;
+                
+                document.getElementById('latency').textContent = currentData.latency_ms;
+                document.getElementById('entities').textContent = currentData.design?.entities?.length || 0;
+                document.getElementById('pages').textContent = currentData.design?.pages?.length || 0;
+                document.getElementById('stats').style.display = 'flex';
+                
+                showTab('intent');
+            } catch (e) {
+                document.getElementById('output').textContent = 'Error: ' + e.message;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Compile';
+            }
+        }
+        
+        function showTab(tab) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            event.target.classList.add('active');
+            
+            if (!currentData) return;
+            
+            const content = document.getElementById('output');
+            switch(tab) {
+                case 'intent': content.textContent = JSON.stringify(currentData.intent, null, 2); break;
+                case 'design': content.textContent = JSON.stringify(currentData.design, null, 2); break;
+                case 'schemas': content.textContent = JSON.stringify(currentData.schemas, null, 2); break;
+                case 'validation': content.textContent = JSON.stringify(currentData.validation, null, 2); break;
+            }
+        }
+    </script>
+</body>
+</html>

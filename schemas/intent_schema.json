@@ -1,0 +1,84 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["entities", "roles", "features"],
+  "properties": {
+    "entities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "fields"],
+        "properties": {
+          "name": {"type": "string"},
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["name", "type"],
+              "properties": {
+                "name": {"type": "string"},
+                "type": {"type": "string", "enum": ["string", "number", "boolean", "date", "email", "phone", "text", "enum", "relation"]},
+                "required": {"type": "boolean"},
+                "unique": {"type": "boolean"},
+                "enum_values": {"type": "array", "items": {"type": "string"}},
+                "relation_to": {"type": "string"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "roles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "permissions"],
+        "properties": {
+          "name": {"type": "string"},
+          "permissions": {
+            "type": "array",
+            "items": {"type": "string", "enum": ["create", "read", "update", "delete", "admin"]}
+          },
+          "extends": {"type": "string"}
+        }
+      }
+    },
+    "features": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "type"],
+        "properties": {
+          "name": {"type": "string"},
+          "type": {"type": "string", "enum": ["page", "api", "business_logic", "integration"]},
+          "entity": {"type": "string"},
+          "access": {"type": "array", "items": {"type": "string"}},
+          "premium": {"type": "boolean"},
+          "config": {"type": "object"}
+        }
+      }
+    },
+    "flows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "steps"],
+        "properties": {
+          "name": {"type": "string"},
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "action": {"type": "string"},
+                "entity": {"type": "string"},
+                "on_success": {"type": "string"},
+                "on_failure": {"type": "string"}
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
