@@ -96,12 +96,13 @@ class SchemaGenerator:
             
             schemas["db"]["tables"][name] = {"fields": table_fields}
             
+            plural = name.lower() + ("es" if name.lower().endswith("s") else "s")
             schemas["api"]["endpoints"].extend([
-                {"path": f"/{name.lower()}s", "method": "GET", "roles": ["user", "admin"], "table": name},
-                {"path": f"/{name.lower()}s", "method": "POST", "roles": ["admin"], "table": name},
-                {"path": f"/{name.lower()}s/{{id}}", "method": "GET", "roles": ["user", "admin"], "table": name},
-                {"path": f"/{name.lower()}s/{{id}}", "method": "PUT", "roles": ["admin"], "table": name},
-                {"path": f"/{name.lower()}s/{{id}}", "method": "DELETE", "roles": ["admin"], "table": name}
+                {"path": f"/{plural}", "method": "GET", "roles": ["user", "admin"], "table": name},
+                {"path": f"/{plural}", "method": "POST", "roles": ["admin"], "table": name},
+                {"path": f"/{plural}/{{id}}", "method": "GET", "roles": ["user", "admin"], "table": name},
+                {"path": f"/{plural}/{{id}}", "method": "PUT", "roles": ["admin"], "table": name},
+                {"path": f"/{plural}/{{id}}", "method": "DELETE", "roles": ["admin"], "table": name}
             ])
         
         for role in roles:
@@ -111,9 +112,11 @@ class SchemaGenerator:
         
         for page in pages:
             page_name = page.get("name", "Unknown")
+            page_route = page.get("route", "/" + page_name.lower().replace(" ", "_"))
             schemas["ui"]["pages"][page_name] = {
                 "components": page.get("components", [])
             }
+            schemas["ui"]["routing"][page_route] = {"page": page_name, "allowed_roles": page.get("allowed_roles", [])}
         
         self._save_schemas(schemas)
         return schemas

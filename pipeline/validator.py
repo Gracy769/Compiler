@@ -115,16 +115,17 @@ class Validator:
     def validate_cross_layer(self, design: Dict, schemas: Dict) -> List[str]:
         errors = []
         design_entities = {e["name"].lower(): e for e in design.get("entities", [])}
-        schema_entities = {k.lower(): v for k, v in schemas.get("entities", {}).items()}
         
-        for name, entity in design_entities.items():
-            if name in schema_entities:
-                schema_entity = schema_entities[name]
-                design_fields = {f.split(":")[0] for f in entity.get("fields", [])}
-                schema_fields = set(schema_entity.get("crud", {}).get("create", {}).get("properties", {}).keys())
-                missing = design_fields - schema_fields
-                if missing:
-                    errors.append(f"Entity '{name}': fields in design but not schema: {missing}")
+        if "entities" in schemas:
+            schema_entities = {k.lower(): v for k, v in schemas.get("entities", {}).items()}
+            for name, entity in design_entities.items():
+                if name in schema_entities:
+                    schema_entity = schema_entities[name]
+                    design_fields = {f.split(":")[0] for f in entity.get("fields", [])}
+                    schema_fields = set(schema_entity.get("crud", {}).get("create", {}).get("properties", {}).keys())
+                    missing = design_fields - schema_fields
+                    if missing:
+                        errors.append(f"Entity '{name}': fields in design but not schema: {missing}")
         
         for role in design.get("roles", []):
             role_name = role.get("name", "")
@@ -134,5 +135,26 @@ class Validator:
                     perms = role.get("permissions", [])
                     if "read" not in perms and "admin" not in perms:
                         errors.append(f"Role '{role_name}' on page '{page['route']}' has no read permission")
+        
+        integrations = schemas.get("intent", {}).get("integrations", []) if "intent" in schemas else []
+        if len(integrations) != len(set(integrations)):
+            errors.append(f"Duplicate integrations found: {integrations}")
+        
+        db_tables = schemas.get("db", {}).get("tables", {})
+        if "deals" in [t.lower() for t in db_tables.keys()]:
+            deal_table = db_tables.get("Deals", {}) or db_tables.get("deals", {})
+            if deal_table:
+                deal_fields = deal_table.get("fields", {})
+                if "stage" not in deal_fields:
+                    errors.append("Deals table missing 'stage' field for deal stages (Lead, Contacted, Negotiation, Closed)")
+        
+        for endpoint in schemas.get("api", {}).get("endpoints", []):
+            path = endpoint.get("path", "")
+            if path.endswith("ss") and "sses" not in path and "/ss/" not in path:
+                errors.append(f"Possible pluralization typo in API path: {path}")
+        
+        ui = schemas.get("ui", {})
+        if ui and not ui.get("routing"):
+            errors.append("UI routing is empty - should have routes for all pages")
         
         return errors

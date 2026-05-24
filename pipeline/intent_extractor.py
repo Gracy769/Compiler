@@ -95,10 +95,10 @@ class IntentExtractor:
         intent = {
             "app_name": self._generate_app_name(prompt),
             "app_type": app_type,
-            "features": features,
-            "entities": entities,
+            "features": list(set(features)),
+            "entities": list(set(entities)),
             "roles": roles,
-            "integrations": integrations,
+            "integrations": list(set(integrations)),
             "ambiguities": [],
             "assumptions": []
         }
