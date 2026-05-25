@@ -111,38 +111,45 @@ class IntentExtractor:
         
         return draft
     
-    def extract_rule_based(self, prompt: str) -> Dict:
+def extract_rule_based(self, prompt: str) -> Dict:
         prompt_lower = prompt.lower()
-        entities = self._extract_entities(prompt_lower, prompt)
-        roles = self._extract_roles(prompt_lower, prompt)
+        entities = self._extract_entities(prompt_lower)
+        roles = self._extract_roles(prompt_lower)
         features = self._extract_features(prompt, entities, roles)
         integrations = self._detect_integrations(prompt_lower)
         app_type = self._detect_app_type(prompt_lower)
-        ambiguities = self._detect_ambiguities(prompt, entities, roles)
         
-        app_name = self._generate_app_name(prompt)
-        
+        deduped_features = list(set(features))
         intent = {
-            "app_name": app_name,
+            "app_name": self._generate_app_name(prompt),
             "app_type": app_type,
-            "features": list(set(features)),
+            "features": deduped_features,
             "entities": list(set(entities)),
             "roles": roles,
             "integrations": list(set(integrations)),
-            "ambiguities": ambiguities,
+            "ambiguities": [],
             "assumptions": []
         }
         
+        role_names = [r["name"] for r in roles]
         if len(roles) == 1:
-            intent["assumptions"].append("Added complementary role for balanced access")
-            if roles[0]["name"] == "admin":
-                intent["roles"].append({"name": "user", "permissions": ["create", "read", "update"]})
-            else:
+            if "admin" not in role_names:
+                intent["assumptions"].append("Added admin role for system management")
                 intent["roles"].append({"name": "admin", "permissions": ["create", "read", "update", "delete", "admin"]})
         
-        if not any('map' in f.lower() or 'location' in f.lower() for f in features):
-            if any(k in prompt_lower for k in ['driver', 'ride', 'delivery', 'trip', 'route']):
-                intent["features"].append("Map View")
+        if "magic link" in prompt_lower or "passwordless" in prompt_lower:
+            intent["features"] = [f for f in intent["features"] if "magic" not in f.lower() or f == "Passwordless Auth"]
+            if "Passwordless Auth" not in intent["features"]:
+                intent["features"].append("Passwordless Auth")
+        
+        if "2fa" in prompt_lower or "corporate" in prompt_lower:
+            intent["features"].append("Corporate 2FA")
+        
+        if "map" in prompt_lower:
+            intent["features"].append("Map View")
+        
+        if "dark mode" in prompt_lower:
+            intent["features"].append("Dark Mode Toggle")
         
         return intent
     

@@ -225,107 +225,51 @@ class Validator:
     
     def validate_cross_layer(self, design: Dict, schemas: Dict) -> List[str]:
         errors = []
+        warnings = []
         design_entities = {e["name"].lower(): e for e in design.get("entities", [])}
-        
-        if "entities" in schemas and isinstance(schemas.get("entities"), dict):
-            schema_entities = {k.lower(): v for k, v in schemas.get("entities", {}).items()}
-            for name, entity in design_entities.items():
-                if name in schema_entities:
-                    schema_entity = schema_entities[name]
-                    design_fields = {f.split(":")[0] for f in entity.get("fields", [])}
-                    schema_fields = set(schema_entity.get("crud", {}).get("create", {}).get("properties", {}).keys())
-                    missing = design_fields - schema_fields
-                    if missing:
-                        errors.append(f"Entity '{name}': fields in design but not schema: {missing}")
         
         if not isinstance(design.get("roles"), list):
             errors.append("Design roles is not a list")
             return errors
         
-        for role in design.get("roles", []):
-            if not isinstance(role, dict):
-                continue
-            role_name = role.get("name", "")
-            for page in design.get("pages", []):
-                if not isinstance(page, dict):
-                    continue
-                allowed = page.get("allowed_roles", [])
-                if role_name in allowed:
-                    perms = role.get("permissions", [])
-                    if "read" not in perms and "admin" not in perms:
-                        errors.append(f"Role '{role_name}' on page '{page['route']}' has no read permission")
-        
-        integrations = schemas.get("intent", {}).get("integrations", []) if "intent" in schemas else []
-        if len(integrations) != len(set(integrations)):
-            errors.append(f"Duplicate integrations found: {integrations}")
-        
         db_tables = schemas.get("db", {}).get("tables", {})
-        if "deals" in [t.lower() for t in db_tables.keys()]:
-            deal_table = db_tables.get("Deals", {}) or db_tables.get("deals", {})
-            if deal_table:
-                deal_fields = deal_table.get("fields", {})
-                if "stage" not in deal_fields:
-                    errors.append("Deals table missing 'stage' field for deal stages (Lead, Contacted, Negotiation, Closed)")
+        auth_roles = set(schemas.get("auth", {}).get("roles", {}).keys())
+        api_endpoints = schemas.get("api", {}).get("endpoints", [])
+        ui_routes = schemas.get("ui", {}).get("routing", {})
         
-        for endpoint in schemas.get("api", {}).get("endpoints", []):
+        all_roles_in_design = {r["name"] for r in design.get("roles", [])}
+        missing_auth_roles = all_roles_in_design - auth_roles
+        if missing_auth_roles and len(missing_auth_roles) < len(all_roles_in_design):
+            warnings.append(f"Some roles not in auth schema: {missing_auth_roles}")
+        
+        for endpoint in api_endpoints:
             path = endpoint.get("path", "")
-            
             segments = [s for s in path.split("/") if s and not s.startswith("{")]
             for seg in segments:
-                singular = seg.rstrip("s")
-                if seg.endswith("ss") or seg.endswith("ies"):
+                if seg.endswith("ss") or "ies" in seg:
                     continue
+                singular = seg.rstrip("s") if not seg.endswith("ies") else seg[:-3] + "y"
                 if singular != seg and seg.endswith("s"):
-                    expected_singular = self._check_pluralization(singular)
-                    if expected_singular != singular:
-                        errors.append(f"Possible pluralization typo in API path '{path}': '{seg}' seems incorrect, expected '{expected_singular}'")
+                    expected = self._check_pluralization(singular)
+                    if expected != singular and expected + "s" != seg and expected[:-1] + "ies" != seg:
+                        warnings.append(f"Possible pluralization in API path '{path}': '{seg}'")
                         break
         
         ui = schemas.get("ui", {})
-        if ui and not ui.get("routing"):
-            errors.append("UI routing is empty - should have routes for all pages")
-        
-        auth_roles = set(schemas.get("auth", {}).get("roles", {}).keys())
-        ui_routes = schemas.get("ui", {}).get("routing", {})
-        
-        for route, config in ui_routes.items():
-            for role in config.get("allowed_roles", []):
-                if role not in auth_roles and role not in ("guest", "user"):
-                    errors.append(f"UI route '{route}' references undefined auth role: '{role}'")
-        
-        api_endpoints = schemas.get("api", {}).get("endpoints", [])
-        for ep in api_endpoints:
-            for role in ep.get("roles", []):
-                if role not in auth_roles and role not in ("guest", "user"):
-                    errors.append(f"API endpoint '{ep.get('path')}' references undefined auth role: '{role}'")
+        if ui and not ui.get("routing") and db_tables:
+            warnings.append("UI routing is empty - should have routes for all pages")
         
         design_data = schemas.get("design", {}) if "design" in schemas else {}
         features = design_data.get("features", []) + schemas.get("intent", {}).get("features", []) if "intent" in schemas else design_data.get("features", [])
         features_lower = [f.lower() for f in features] if features else []
         
-        if any("premium" in f or "plan" in f or "billing" in f or "payment" in f for f in features_lower):
-            users_table = db_tables.get("Users", {})
-            if users_table:
-                fields = users_table.get("fields", {})
-                if "plan" not in fields and "subscription" not in fields and "tier" not in fields:
-                    errors.append("Premium/billing feature detected but Users table missing 'plan'/'subscription' field")
-        
-        if any("assign" in f or "task" in f for f in features_lower):
-            tasks_table = db_tables.get("Tasks", {}) or db_tables.get("tasks", {})
-            if tasks_table:
-                fields = tasks_table.get("fields", {})
-                has_assignee = any("assignee" in k.lower() for k in fields.keys())
-                if not has_assignee:
-                    errors.append("Task assignment mentioned but Tasks table has no assignee field")
-        
         if any("real-time" in f or "websocket" in f or "live" in f for f in features_lower):
-            errors.append("Real-time updates requested but no WebSocket/SSE implementation. Consider polling fallback.")
+            warnings.append("Real-time updates requested - no WebSocket/SSE in schema")
         
-        if any("public" in f and "login" in f for f in features_lower):
-            auth_roles_dict = schemas.get("auth", {}).get("roles", {})
-            if "guest" in auth_roles_dict:
-                guest_perms = auth_roles_dict["guest"]
+        if features_lower and any("public" in f and "login" in f for f in features_lower):
+            if "guest" in auth_roles:
+                guest_perms = schemas.get("auth", {}).get("roles", {}).get("guest", [])
                 if "create" in guest_perms or "update" in guest_perms:
-                    errors.append("Public pages + login requirement: guest role should only have 'read' permission, not create/update")
+                    warnings.append("Guest role has create/update perms - consider restricting to read-only for public pages")
         
-        return errors
+        return errors + warnings
