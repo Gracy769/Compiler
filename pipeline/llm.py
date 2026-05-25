@@ -1,5 +1,5 @@
 import time, logging, os, json, re
-from typing import Tuple
+from typing import Tuple, Optional
 from openai import OpenAI
 
 logger = logging.getLogger("ai-compiler")
@@ -19,21 +19,29 @@ MAX_RETRIES = 2
 _nvidia_client = None
 _groq_client = None
 
-def _get_nvidia_client():
+def _get_nvidia_client() -> OpenAI:
     global _nvidia_client
     if _nvidia_client is None:
         if not NVIDIA_API_KEY:
-            raise RuntimeError("NVIDIA_API_KEY environment variable not set")
+            raise RuntimeError("NVIDIA_API_KEY environment variable not set. Get one from https://developer.nvidia.com/")
         _nvidia_client = OpenAI(base_url=NVIDIA_BASE_URL, api_key=NVIDIA_API_KEY)
     return _nvidia_client
 
-def _get_groq_client():
+def _get_groq_client() -> OpenAI:
     global _groq_client
     if _groq_client is None:
         if not GROQ_API_KEY:
-            raise RuntimeError("GROQ_API_KEY environment variable not set")
+            raise RuntimeError("GROQ_API_KEY environment variable not set. Get one from https://console.groq.com/")
         _groq_client = OpenAI(base_url=GROQ_BASE_URL, api_key=GROQ_API_KEY)
     return _groq_client
+
+def _safe_get_content(completion) -> str:
+    if not completion.choices:
+        return ""
+    choice = completion.choices[0]
+    if not hasattr(choice, 'message'):
+        return ""
+    return choice.message.content or ""
 
 def generate_with_llama(
     prompt: str,
@@ -58,7 +66,9 @@ def generate_with_llama(
             top_p=0.9,
             max_tokens=max_tokens
         )
-        result = completion.choices[0].message.content
+        result = _safe_get_content(completion)
+        if not result:
+            raise ValueError("Empty response from Groq")
         logger.info(f"Llama generation: {len(result)} chars in {time.time()-t0:.1f}s")
         return result
     except Exception as e:
@@ -96,14 +106,27 @@ Respond with ONLY corrected JSON:"""
             top_p=0.9,
             max_tokens=max_tokens
         )
-        corrected = completion.choices[0].message.content
+        corrected = _safe_get_content(completion)
+        if not corrected:
+            logger.warning("MiniMax returned empty response")
+            return draft, False
+        
         corrected = repair_json(corrected)
-        was_fixed = corrected.strip() != draft.strip()
+        
+        was_fixed = _json_structurally_different(draft, corrected)
         logger.info(f"MiniMax review: {len(corrected)} chars in {time.time()-t0:.1f}s, was_fixed={was_fixed}")
         return corrected, was_fixed
     except Exception as e:
         logger.warning(f"MiniMax review failed: {e}")
         return draft, False
+
+def _json_structurally_different(original: str, corrected: str) -> bool:
+    try:
+        orig_parsed = json.loads(original)
+        corr_parsed = json.loads(corrected)
+        return orig_parsed != corr_parsed
+    except json.JSONDecodeError:
+        return original.strip() != corrected.strip()
 
 def repair_json(text: str) -> str:
     try:
@@ -111,8 +134,15 @@ def repair_json(text: str) -> str:
     except ImportError:
         def repair(t): return t
     
+    original_text = text
     text = text.strip()
     text = re.sub(r"```(?:json)?\s*", "", text).replace("```", "").strip()
+    
+    brace_count = text.count('{') - text.count('}')
+    if brace_count > 0:
+        text += '}' * brace_count
+    elif brace_count < 0:
+        text = '{' * (-brace_count) + text
     
     if not text.startswith("{"):
         match = re.search(r'\{[\s\S]*\}', text)
@@ -122,6 +152,19 @@ def repair_json(text: str) -> str:
     try:
         json.loads(text)
         return text
-    except:
+    except json.JSONDecodeError:
         repaired = repair(text)
-        return repaired if repaired else text
+        if repaired and repaired != text:
+            try:
+                json.loads(repaired)
+                return repaired
+            except:
+                pass
+        return original_text
+
+def minify_json(text: str) -> str:
+    try:
+        data = json.loads(text)
+        return json.dumps(data, separators=(',', ':'))
+    except:
+        return text
