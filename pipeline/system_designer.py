@@ -66,21 +66,22 @@ Format:
 
 class SystemDesigner:
     def design_llm(self, intent: Dict) -> Dict:
+        draft = self.design_rule_based(intent)
+        
         try:
-            from pipeline.llm import generate_and_review
-            entity_names = [e.get("name") for e in intent.get("entities", [])]
-            roles_info = ", ".join([f"{r.get('name')}({','.join(r.get('permissions',[]))})" for r in intent.get('roles', [])])
-            
-            raw, was_reviewed = generate_and_review(
-                user_prompt=f"Design architecture for: {intent.get('app_name', 'App')}\nEntities: {entity_names}\nRoles: {roles_info}\nApp type: {intent.get('app_type')}",
-                system_prompt=SYSTEM_DESIGN_PROMPT,
-                review_task="Ensure all entities have fields, roles have permissions, pages have routes and allowed_roles",
-                max_tokens=8192
+            from pipeline.llm import review_with_minimax
+            draft_json = json.dumps(draft)
+            corrected, was_fixed = review_with_minimax(
+                draft_json,
+                "Ensure all entities have fields (id, name, created_at), roles have permissions, pages have routes and allowed_roles, permissions mapping is correct"
             )
-            logger.info(f"Design: reviewed={was_reviewed}")
-            return self._parse_and_validate(raw)
+            if was_fixed:
+                draft = json.loads(corrected)
+                logger.info(f"Design: MiniMax fixed={was_fixed}")
         except Exception as e:
-            return self.design_rule_based(intent)
+            logger.warning(f"Design review failed: {e}")
+        
+        return draft
     
     def _parse_and_validate(self, raw: str) -> Dict:
         import jsonschema

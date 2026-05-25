@@ -18,18 +18,6 @@ INTENT_SCHEMA = {
     }
 }
 
-INTENT_PROMPT = """Extract app intent from user request.
-
-Output ONLY valid JSON (no markdown):
-{"app_name":"Name","app_type":"crm|ecommerce|saas|dashboard|marketplace|custom","features":["Feature1"],"entities":["entity1"],"roles":["admin","user"],"integrations":[],"ambiguities":[],"assumptions":[]}
-
-Rules:
-- features: max 10 items, be specific (e.g. "User Authentication" not just "auth")
-- entities: data objects plural (users, products, orders)
-- roles: user roles (admin, customer, vendor, etc)
-- app_type: choose one
-- integrations: external services (Stripe, SendGrid, Auth0)"""
-
 class IntentExtractor:
     def __init__(self):
         self.entity_keywords = {
@@ -38,55 +26,38 @@ class IntentExtractor:
             'payment': 'payments', 'task': 'tasks', 'project': 'projects',
             'company': 'companies', 'lead': 'leads', 'deal': 'deals',
             'ticket': 'tickets', 'article': 'articles', 'post': 'posts',
-            'comment': 'comments', 'category': 'categories', 'tag': 'tags'
+            'comment': 'comments', 'category': 'categories', 'tag': 'tags',
+            'doctor': 'doctors', 'patient': 'patients', 'appointment': 'appointments',
+            'inventory': 'inventory', 'vendor': 'vendors', 'subscription': 'subscriptions'
         }
         self.role_keywords = {
             'admin': 'admin', 'administrator': 'admin', 'user': 'user', 
             'customer': 'customer', 'guest': 'guest', 'manager': 'manager',
-            'vendor': 'vendor', 'doctor': 'doctor', 'patient': 'patient'
+            'vendor': 'vendor', 'doctor': 'doctor', 'patient': 'patient',
+            'editor': 'editor', 'viewer': 'viewer', 'owner': 'owner'
         }
     
     def extract(self, prompt: str) -> Dict[str, Any]:
-        return self.extract_llm(prompt)
+        return self.extract_rule_based(prompt)
     
-    def extract_llm(self, prompt: str) -> Dict:
+    def extract_with_review(self, prompt: str) -> Dict[str, Any]:
+        """Rule-based extraction + MiniMax review"""
+        draft = self.extract_rule_based(prompt)
+        
         try:
-            from pipeline.llm import generate_and_review
-            
-            raw, was_reviewed = generate_and_review(
-                user_prompt=f"Extract intent:\n\n{prompt}",
-                system_prompt=INTENT_PROMPT,
-                review_task="Ensure app_name, app_type, features[], entities[], roles[], integrations[] are all present and valid",
-                max_tokens=4096
+            from pipeline.llm import review_with_minimax
+            draft_json = json.dumps(draft)
+            corrected, was_fixed = review_with_minimax(
+                draft_json,
+                "Ensure app_name, app_type, features[], entities[], roles[], integrations[] are all present"
             )
-            logger.info(f"Intent: reviewed={was_reviewed}")
-            return self._parse_and_repair(raw)
+            if was_fixed:
+                draft = json.loads(corrected)
+                logger.info(f"Intent: MiniMax fixed={was_fixed}")
         except Exception as e:
-            logger.warning(f"LLM extraction failed: {e}, using rule-based")
-            return self.extract_rule_based(prompt)
-    
-    def _parse_and_repair(self, raw: str) -> Dict:
-        import jsonschema
-        text = re.sub(r"```(?:json)?\s*", "", raw).strip().replace("```", "").strip()
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError:
-            match = re.search(r'\{[\s\S]*\}', text)
-            if match:
-                data = json.loads(match.group())
-            else:
-                raise ValueError("Failed to parse JSON")
+            logger.warning(f"Intent review failed: {e}")
         
-        try:
-            jsonschema.validate(instance=data, schema=INTENT_SCHEMA)
-        except jsonschema.ValidationError:
-            data.setdefault("assumptions", [])
-            data.setdefault("ambiguities", [])
-            if not data.get("roles"):
-                data["roles"] = ["user", "admin"]
-                data["assumptions"].append("Default roles assumed")
-        
-        return data
+        return draft
     
     def extract_rule_based(self, prompt: str) -> Dict:
         prompt_lower = prompt.lower()
@@ -123,14 +94,14 @@ class IntentExtractor:
             if keyword in text and entity_name not in found:
                 entities.append(entity_name)
                 found.add(entity_name)
-        return entities
+        return entities if entities else ["items"]
     
     def _extract_roles(self, text: str) -> List[Dict]:
         roles = []
         seen = set()
         for keyword, role in self.role_keywords.items():
             if keyword in text and role not in seen:
-                perms = ['read'] if role != 'admin' else ['create', 'read', 'update', 'delete', 'admin']
+                perms = ['create', 'read', 'update'] if role != 'admin' else ['create', 'read', 'update', 'delete', 'admin']
                 roles.append({"name": role, "permissions": perms})
                 seen.add(role)
         return roles if roles else [{"name": "user", "permissions": ["create", "read", "update"]}]
@@ -140,10 +111,14 @@ class IntentExtractor:
         prompt_lower = prompt.lower()
         
         feature_keywords = {
-            'login': 'Authentication', 'register': 'Registration', 'dashboard': 'Dashboard',
-            'analytics': 'Analytics', 'payment': 'Payments', 'billing': 'Billing',
-            'search': 'Search', 'filter': 'Filtering', 'export': 'Export', 'import': 'Import',
-            'chat': 'Chat', 'messaging': 'Messaging', 'notification': 'Notifications'
+            'login': 'Authentication', 'register': 'Registration', 'signup': 'Registration',
+            'dashboard': 'Dashboard', 'analytics': 'Analytics', 'payment': 'Payments',
+            'billing': 'Billing', 'search': 'Search', 'filter': 'Filtering',
+            'export': 'Export', 'import': 'Import', 'chat': 'Chat', 'messaging': 'Messaging',
+            'notification': 'Notifications', 'email': 'Email Notifications', 'sms': 'SMS Notifications',
+            'comment': 'Comments', 'like': 'Likes', 'follow': 'Follow', 'post': 'Posts',
+            'review': 'Reviews', 'rating': 'Ratings', 'cart': 'Shopping Cart',
+            'checkout': 'Checkout', 'order': 'Orders', 'refund': 'Refunds'
         }
         
         for keyword, feature in feature_keywords.items():
@@ -151,7 +126,8 @@ class IntentExtractor:
                 features.append(feature)
         
         for entity in entities:
-            features.append(f"{entity.title()} CRUD")
+            if entity != 'items':
+                features.append(f"{entity.title()} CRUD")
         
         return list(set(features))
     
@@ -159,7 +135,8 @@ class IntentExtractor:
         integration_map = {
             'stripe': 'Stripe', 'payment': 'Stripe', 'email': 'SendGrid',
             'sms': 'Twilio', 'auth': 'Auth0', 'analytics': 'Mixpanel',
-            'slack': 'Slack', 'github': 'GitHub', 'google': 'Google OAuth'
+            'slack': 'Slack', 'github': 'GitHub', 'google': 'Google OAuth',
+            'facebook': 'Facebook', 'twitter': 'Twitter', 'instagram': 'Instagram'
         }
         return [name for key, name in integration_map.items() if key in text]
     
@@ -169,7 +146,10 @@ class IntentExtractor:
             'ecommerce': ['ecommerce', 'shop', 'store', 'cart', 'checkout'],
             'saas': ['saas', 'subscription', 'multi-tenant'],
             'dashboard': ['dashboard', 'analytics', 'metrics', 'reporting'],
-            'marketplace': ['marketplace', 'vendor', 'seller']
+            'marketplace': ['marketplace', 'vendor', 'seller'],
+            'social': ['social', 'post', 'like', 'comment', 'follow', 'feed'],
+            'healthcare': ['patient', 'doctor', 'medical', 'health', 'clinic'],
+            'booking': ['booking', 'appointment', 'reservation', 'ticket']
         }
         for app_type, signatures in type_signatures.items():
             if any(sig in text for sig in signatures):
@@ -177,6 +157,6 @@ class IntentExtractor:
         return 'custom'
     
     def _generate_app_name(self, prompt: str) -> str:
-        words = [w for w in prompt.split() if len(w) > 3 and w.lower() not in 
-                ['crm', 'user', 'admin', 'build', 'create', 'make', 'with', 'that', 'this']]
+        stop_words = {'crm', 'user', 'admin', 'build', 'create', 'make', 'with', 'that', 'this', 'the', 'a', 'an', 'for', 'and', 'or', 'but'}
+        words = [w for w in prompt.split() if len(w) > 3 and w.lower() not in stop_words]
         return ''.join(w.capitalize() for w in words[:3]) or 'MyApp'

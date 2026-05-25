@@ -42,21 +42,22 @@ class SchemaGenerator:
         os.makedirs(self.schema_dir, exist_ok=True)
     
     def generate_llm(self, system_design: Dict) -> Dict:
+        draft = self.generate_rule_based(system_design)
+        
         try:
-            from pipeline.llm import generate_and_review
-            entity_names = [e.get("name") for e in system_design.get("entities", [])]
-            
-            raw, was_reviewed = generate_and_review(
-                user_prompt=f"Generate DB/API/UI/Auth schemas for: {entity_names}",
-                system_prompt=SCHEMA_GENERATION_PROMPT,
-                review_task="Ensure db.tables has fields, api.endpoints has CRUD, ui.pages and ui.routing populated, auth.roles has permissions",
-                max_tokens=8192
+            from pipeline.llm import review_with_minimax
+            draft_json = json.dumps(draft)
+            corrected, was_fixed = review_with_minimax(
+                draft_json,
+                "Ensure db.tables has fields with types, api.endpoints has CRUD paths with methods and roles, ui.pages and ui.routing populated, auth.roles has permissions"
             )
-            logger.info(f"Schema: reviewed={was_reviewed}")
-            return self._parse_and_save(raw)
+            if was_fixed:
+                draft = json.loads(corrected)
+                logger.info(f"Schema: MiniMax fixed={was_fixed}")
         except Exception as e:
-            logger.warning(f"LLM schema failed: {e}, using rule-based")
-            return self.generate_rule_based(system_design)
+            logger.warning(f"Schema review failed: {e}")
+        
+        return draft
     
     def _parse_and_save(self, raw: str) -> Dict:
         import re
