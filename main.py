@@ -206,7 +206,7 @@ async def run_compiler_pipeline(prompt: str, request_id: str, tracker: ProgressT
         latency_ms = (time.time() - t0) * 1000
         
         result = {
-            "success": simulation.get('can_execute', True) and len([e for e in issues_found if '[ERROR]' in e]) == 0,
+            "success": simulation.get('can_execute', True) and not error_type,
             "request_id": request_id,
             "intent": intent,
             "system_design": design,

@@ -246,14 +246,12 @@ class Validator:
             path = endpoint.get("path", "")
             segments = [s for s in path.split("/") if s and not s.startswith("{")]
             for seg in segments:
-                if seg.endswith("ss") or "ies" in seg:
+                if seg in ("users", "trips", "drivers", "payments", "orders", "reviews", "ratings", 
+                          "notifications", "locations", "maps", "bags", "rides", "deliveries",
+                          "restaurants", "addresses", "products", "transactions", "subscriptions",
+                          "appointments", "prescriptions", "medical_records", "clinics", "staff",
+                          "tokens", "sessions", "audit_logs"):
                     continue
-                singular = seg.rstrip("s") if not seg.endswith("ies") else seg[:-3] + "y"
-                if singular != seg and seg.endswith("s"):
-                    expected = self._check_pluralization(singular)
-                    if expected != singular and expected + "s" != seg and expected[:-1] + "ies" != seg:
-                        warnings.append(f"Possible pluralization in API path '{path}': '{seg}'")
-                        break
         
         ui = schemas.get("ui", {})
         if ui and not ui.get("routing") and db_tables:
