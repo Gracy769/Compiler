@@ -69,9 +69,9 @@ class SystemDesigner:
         draft = self.design_rule_based(intent)
         
         try:
-            from pipeline.llm import review_with_minimax
+            from pipeline.llm import review_with_model
             draft_json = json.dumps(draft)
-            corrected, was_fixed = review_with_minimax(
+            corrected, was_fixed = review_with_model(
                 draft_json,
                 "Ensure all entities have fields (id, name, created_at), roles have permissions, pages have routes and allowed_roles, permissions mapping is correct"
             )

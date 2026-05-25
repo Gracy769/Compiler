@@ -97,9 +97,9 @@ class IntentExtractor:
         draft = self.extract_rule_based(prompt)
         
         try:
-            from pipeline.llm import review_with_minimax
+            from pipeline.llm import review_with_model
             draft_json = json.dumps(draft)
-            corrected, was_fixed = review_with_minimax(
+            corrected, was_fixed = review_with_model(
                 draft_json,
                 "Ensure app_name, app_type, features[], entities[], roles[], integrations[] are all present and comprehensive"
             )

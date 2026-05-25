@@ -45,9 +45,9 @@ class SchemaGenerator:
         draft = self.generate_rule_based(system_design)
         
         try:
-            from pipeline.llm import review_with_minimax
+            from pipeline.llm import review_with_model
             draft_json = json.dumps(draft)
-            corrected, was_fixed = review_with_minimax(
+            corrected, was_fixed = review_with_model(
                 draft_json,
                 "Ensure db.tables has fields with types, api.endpoints has CRUD paths with methods and roles, ui.pages and ui.routing populated, auth.roles has permissions"
             )
