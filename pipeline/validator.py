@@ -1,15 +1,35 @@
-import json, re, jsonschema
-from typing import Dict, Tuple, List, Any
+import json, re, jsonschema, logging
+from typing import Dict, Tuple, List, Any, Optional
+from functools import lru_cache
+
+logger = logging.getLogger("ai-compiler")
 
 REPAIR_MARKDOWN_RE = re.compile(r"```(?:json)?\s*|\s*```")
-REPAIR_BRACE_RE   = re.compile(r"\{[\s\S]*\}")
+REPAIR_BRACE_RE = re.compile(r"\{[\s\S]*\}")
+REPAIR_ARRAY_RE = re.compile(r"\[[\s\S]*\]")
+PLURAL_IRREGULAR = {
+    "person": "people", "man": "men", "woman": "women", "child": "children",
+    "tooth": "teeth", "foot": "feet", "mouse": "mice", "ox": "oxen",
+    "cactus": "cacti", "focus": "foci", "fungus": "fungi", "nucleus": "nuclei",
+    "radius": "radii", "stimulus": "stimuli", "syllabus": "syllabi",
+    "analysis": "analyses", "crisis": "crises", "diagnosis": "diagnoses",
+    "hypothesis": "hypotheses", "thesis": "theses", "phenomenon": "phenomena",
+    "criterion": "criteria", "datum": "data"
+}
+PLURAL_RULES = [
+    (re.compile(r"(s|x|z|ch|sh)$"), r"\1es"),
+    (re.compile(r"([^aeiou])y$"), r"\1ies"),
+    (re.compile(r"(?:f|fe)$"), r"ves"),
+    (re.compile(r"ss$"), r"sses"),
+]
 
 class ValidationResult:
-    def __init__(self, valid: bool, data: Any = None, errors: List[str] = None, repaired: bool = False):
-        self.valid   = valid
-        self.data    = data
-        self.errors  = errors or []
+    def __init__(self, valid: bool, data: Any = None, errors: List[str] = None, repaired: bool = False, repairs_log: List[str] = None):
+        self.valid = valid
+        self.data = data
+        self.errors = errors or []
         self.repaired = repaired
+        self.repairs_log = repairs_log or []
     
     def __repr__(self):
         status = "VALID" if self.valid else "INVALID"
@@ -17,50 +37,108 @@ class ValidationResult:
         return f"<ValidationResult {status} errors={self.errors}>"
 
 class Validator:
+    _validator_cache: Dict[str, jsonschema.Draft7Validator] = {}
+    
     def __init__(self):
         self.schemas = {}
     
-    def repair_json(self, raw: str) -> str:
+    def repair_json(self, raw: str) -> List[str]:
+        repairs = []
         raw = raw.strip()
-        raw = REPAIR_MARKDOWN_RE.sub("", raw)
-        raw = raw.strip()
-        if not raw.startswith("{"):
-            m = REPAIR_BRACE_RE.search(raw)
-            raw = m.group() if m else raw
-        return raw
+        raw = REPAIR_MARKDOWN_RE.sub("", raw).strip()
+        
+        texts = []
+        if raw.startswith("["):
+            matches = REPAIR_ARRAY_RE.findall(raw)
+            texts.extend(matches)
+        elif raw.startswith("{"):
+            matches = REPAIR_BRACE_RE.findall(raw)
+            texts.extend(matches)
+        else:
+            brace_matches = REPAIR_BRACE_RE.findall(raw)
+            array_matches = REPAIR_ARRAY_RE.findall(raw)
+            texts = brace_matches + array_matches
+        
+        if not texts:
+            texts = [raw]
+        
+        repaired_texts = []
+        for text in texts:
+            try:
+                json.loads(text)
+                repaired_texts.append(text)
+            except json.JSONDecodeError:
+                try:
+                    from json_repair import repair_json as repair
+                    fixed = repair(text)
+                    repairs.append(f"json_repair fixed: {text[:50]}...")
+                    repaired_texts.append(fixed)
+                except ImportError:
+                    repaired_texts.append(text)
+        
+        if len(repaired_texts) > 1:
+            repairs.append(f"Multiple JSON fragments found: {len(repaired_texts)} pieces")
+            return repaired_texts, repairs
+        
+        return repaired_texts, repairs
     
-    def safe_json_parse(self, text: str) -> Tuple[bool, Any, str]:
-        repaired_text = self.repair_json(text)
-        try:
-            return True, json.loads(repaired_text), ""
-        except json.JSONDecodeError as e:
-            return False, None, str(e)
+    def safe_json_parse(self, text: str) -> Tuple[bool, Any, str, List[str]]:
+        repairs = []
+        texts, repair_log = self.repair_json(text)
+        repairs.extend(repair_log)
+        
+        for attempt, t in enumerate(texts):
+            try:
+                return True, json.loads(t), "", repairs
+            except json.JSONDecodeError as e:
+                if attempt == len(texts) - 1:
+                    return False, None, str(e), repairs
+        return False, None, "Failed to parse JSON", repairs
+    
+    @classmethod
+    def _get_cached_validator(cls, schema: Dict) -> jsonschema.Draft7Validator:
+        schema_str = json.dumps(schema, sort_keys=True)
+        if schema_str not in cls._validator_cache:
+            cls._validator_cache[schema_str] = jsonschema.Draft7Validator(schema)
+        return cls._validator_cache[schema_str]
     
     def validate(self, data: Any, schema: Dict, level: int = 1) -> ValidationResult:
         try:
-            jsonschema.validate(instance=data, schema=schema)
+            validator = self._get_cached_validator(schema)
+            validator.validate(data)
             return ValidationResult(valid=True, data=data)
         except jsonschema.ValidationError as e:
             return self._repair_and_validate(data, schema, e, level)
     
     def _repair_and_validate(self, data: Any, schema: Dict, original_error: Exception, level: int) -> ValidationResult:
+        all_errors = [str(original_error)]
+        repairs_log = []
+        
         if level == 1:
-            repaired = self._level1_repair(data, schema)
+            repaired, log = self._level1_repair(data, schema)
+            repairs_log.extend(log)
         elif level == 2:
-            repaired = self._level2_repair(data, schema)
+            repaired, log = self._level2_repair(data, schema)
+            repairs_log.extend(log)
         else:
-            repaired = self._level3_repair(data, schema)
+            repaired, log = self._level3_repair(data, schema)
+            repairs_log.extend(log)
         
         if repaired is None:
-            return ValidationResult(valid=False, data=data, errors=[str(original_error)], repaired=False)
+            return ValidationResult(valid=False, data=data, errors=all_errors, repairs_log=repairs_log)
         
         try:
-            jsonschema.validate(instance=repaired, schema=schema)
-            return ValidationResult(valid=True, data=repaired, repaired=True)
+            validator = self._get_cached_validator(schema)
+            validator.validate(repaired)
+            logger.info(f"Validator repairs applied: {repairs_log}")
+            return ValidationResult(valid=True, data=repaired, repaired=True, repairs_log=repairs_log)
         except jsonschema.ValidationError as e:
-            return ValidationResult(valid=False, data=repaired, errors=[str(e)], repaired=True)
+            all_errors.append(str(e))
+            logger.warning(f"Validator repair failed at level {level}: {all_errors}")
+            return ValidationResult(valid=False, data=repaired, errors=all_errors, repaired=True, repairs_log=repairs_log)
     
-    def _level1_repair(self, data: Any, schema: Dict) -> Any:
+    def _level1_repair(self, data: Any, schema: Dict) -> Tuple[Any, List[str]]:
+        repairs = []
         if isinstance(data, dict):
             result = {}
             for key, value in data.items():
@@ -68,49 +146,82 @@ class Validator:
                     expected = schema["properties"][key]["type"]
                     if expected == "array" and not isinstance(value, list):
                         result[key] = [value] if value else []
+                        repairs.append(f"Coerced '{key}' to array")
                     elif expected == "object" and not isinstance(value, dict):
                         result[key] = {"value": value} if value else {}
+                        repairs.append(f"Coerced '{key}' to object wrapper")
                     else:
                         result[key] = value
                 else:
                     result[key] = value
-            return result
-        return data
+            return result, repairs
+        return data, repairs
     
-    def _level2_repair(self, data: Any, schema: Dict) -> Any:
+    def _level2_repair(self, data: Any, schema: Dict) -> Tuple[Any, List[str]]:
+        repairs = []
         if isinstance(data, dict):
             result = {}
             required = set(schema.get("required", []))
             for req in required:
                 if req not in data:
-                    result[req] = self._default_for_type(schema["properties"].get(req, {}).get("type", "string"))
+                    default = self._default_for_type(schema["properties"].get(req, {}).get("type", "string"))
+                    result[req] = default
+                    repairs.append(f"Added missing required field '{req}' with default")
             for key, value in data.items():
                 if key in schema.get("properties", {}):
                     prop_schema = schema["properties"][key]
-                    result[key] = self._coerce_type(value, prop_schema.get("type", "string"))
+                    result[key], coerced = self._coerce_type_verbose(value, prop_schema.get("type", "string"))
+                    if coerced:
+                        repairs.append(coerced)
                 else:
                     result[key] = value
-            return result
-        return data
+            return result, repairs
+        return data, repairs
     
-    def _level3_repair(self, data: Any, schema: Dict) -> Any:
-        repaired = self._level2_repair(data, schema)
+    def _level3_repair(self, data: Any, schema: Dict) -> Tuple[Any, List[str]]:
+        repaired, repairs = self._level2_repair(data, schema)
         if not isinstance(repaired, dict):
-            return None
-        return repaired
+            return None, repairs
+        return repaired, repairs
     
     def _default_for_type(self, ftype: str) -> Any:
-        defaults = {"string": "", "array": [], "object": {}, "boolean": False, "integer": 0, "number": 0.0}
-        return defaults.get(ftype, None)
+        defaults = {
+            "string": "", "array": [], "object": {},
+            "boolean": False, "integer": 0, "number": 0.0,
+            "null": None
+        }
+        return defaults.get(ftype, "")
     
-    def _coerce_type(self, value: Any, ftype: str) -> Any:
+    def _coerce_type_verbose(self, value: Any, ftype: str) -> Tuple[Any, Optional[str]]:
         if ftype == "integer":
-            try: return int(value)
-            except: return 0
+            try:
+                return int(value), None
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Type coercion failed: {value} -> integer: {e}")
+                return 0, f"Coerced '{value}' to integer (was {type(value).__name__})"
         if ftype == "number":
-            try: return float(value)
-            except: return 0.0
-        return value
+            try:
+                return float(value), None
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Type coercion failed: {value} -> number: {e}")
+                return 0.0, f"Coerced '{value}' to float (was {type(value).__name__})"
+        if ftype == "boolean" and not isinstance(value, bool):
+            if isinstance(value, str):
+                return value.lower() in ("true", "1", "yes"), f"Coerced '{value}' to boolean"
+            return bool(value), f"Coerced '{value}' to boolean"
+        if ftype == "array" and not isinstance(value, list):
+            return [value] if value else [], f"Coerced '{value}' to array"
+        if ftype == "object" and not isinstance(value, dict):
+            return {"value": value} if value else {}, f"Coerced '{value}' to object"
+        return value, None
+    
+    def _check_pluralization(self, word: str) -> str:
+        if word.lower() in PLURAL_IRREGULAR:
+            return PLURAL_IRREGULAR[word.lower()]
+        for pattern, replacement in PLURAL_RULES:
+            if pattern.search(word):
+                return pattern.sub(replacement, word)
+        return word + "s"
     
     def validate_cross_layer(self, design: Dict, schemas: Dict) -> List[str]:
         errors = []
@@ -158,37 +269,39 @@ class Validator:
         
         for endpoint in schemas.get("api", {}).get("endpoints", []):
             path = endpoint.get("path", "")
-            if path.endswith("ss") and "sses" not in path and "/ss/" not in path:
-                errors.append(f"Possible pluralization typo in API path: {path}")
+            
+            segments = [s for s in path.split("/") if s and not s.startswith("{")]
+            for seg in segments:
+                singular = seg.rstrip("s")
+                if seg.endswith("ss") or seg.endswith("ies"):
+                    continue
+                if singular != seg and seg.endswith("s"):
+                    expected_singular = self._check_pluralization(singular)
+                    if expected_singular != singular:
+                        errors.append(f"Possible pluralization typo in API path '{path}': '{seg}' seems incorrect, expected '{expected_singular}'")
+                        break
         
         ui = schemas.get("ui", {})
         if ui and not ui.get("routing"):
             errors.append("UI routing is empty - should have routes for all pages")
-
+        
         auth_roles = set(schemas.get("auth", {}).get("roles", {}).keys())
         ui_routes = schemas.get("ui", {}).get("routing", {})
-        undefined_roles = set()
+        
         for route, config in ui_routes.items():
             for role in config.get("allowed_roles", []):
                 if role not in auth_roles and role not in ("guest", "user"):
-                    undefined_roles.add(role)
-        if undefined_roles:
-            errors.append(f"UI routes reference undefined auth roles: {undefined_roles}")
-
+                    errors.append(f"UI route '{route}' references undefined auth role: '{role}'")
+        
         api_endpoints = schemas.get("api", {}).get("endpoints", [])
-        undefined_api_roles = set()
         for ep in api_endpoints:
             for role in ep.get("roles", []):
                 if role not in auth_roles and role not in ("guest", "user"):
-                    undefined_api_roles.add(role)
-        if undefined_api_roles:
-            errors.append(f"API endpoints reference undefined auth roles: {undefined_api_roles}")
-
-        design = schemas.get("design", {}) if "design" in schemas else {}
-        features = design.get("features", []) + schemas.get("intent", {}).get("features", []) if "intent" in schemas else design.get("features", [])
-        features_lower = [f.lower() for f in features] if features else []
+                    errors.append(f"API endpoint '{ep.get('path')}' references undefined auth role: '{role}'")
         
-        db_tables = schemas.get("db", {}).get("tables", {})
+        design_data = schemas.get("design", {}) if "design" in schemas else {}
+        features = design_data.get("features", []) + schemas.get("intent", {}).get("features", []) if "intent" in schemas else design_data.get("features", [])
+        features_lower = [f.lower() for f in features] if features else []
         
         if any("premium" in f or "plan" in f or "billing" in f or "payment" in f for f in features_lower):
             users_table = db_tables.get("Users", {})
@@ -209,9 +322,9 @@ class Validator:
             errors.append("Real-time updates requested but no WebSocket/SSE implementation. Consider polling fallback.")
         
         if any("public" in f and "login" in f for f in features_lower):
-            auth_roles = schemas.get("auth", {}).get("roles", {})
-            if "guest" in auth_roles:
-                guest_perms = auth_roles["guest"]
+            auth_roles_dict = schemas.get("auth", {}).get("roles", {})
+            if "guest" in auth_roles_dict:
+                guest_perms = auth_roles_dict["guest"]
                 if "create" in guest_perms or "update" in guest_perms:
                     errors.append("Public pages + login requirement: guest role should only have 'read' permission, not create/update")
         

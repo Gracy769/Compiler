@@ -3,7 +3,7 @@ import json
 import time
 import logging
 import os
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
+from fastapi import FastAPI, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
 from pydantic import BaseModel
@@ -29,14 +29,13 @@ pipeline_llm = Pipeline(use_llm=True)
 
 class CompileRequest(BaseModel):
     prompt: str
-    use_llm: bool = False
 
 STAGES = [
-    {"name": "intent_extraction", "display": "Intent Extraction"},
-    {"name": "system_design", "display": "System Design"},
-    {"name": "schema_generation", "display": "Schema Generation"},
-    {"name": "validation_repair", "display": "Validation"},
-    {"name": "simulation", "display": "Simulation"},
+    {"name": "1_intent_extraction", "display": "Intent Extraction", "key": "intent"},
+    {"name": "2_system_design", "display": "System Design", "key": "design"},
+    {"name": "3_schema_generation", "display": "Schema Generation", "key": "schemas"},
+    {"name": "4_validation_refinement", "display": "Validation & Refinement", "key": "validation"},
+    {"name": "5_output", "display": "Output Ready", "key": "output"},
 ]
 
 tracker_store: Dict[str, 'ProgressTracker'] = {}
@@ -94,9 +93,12 @@ async def compile_endpoint(request: CompileRequest, background_tasks: Background
     tracker = ProgressTracker(request_id, STAGES)
     tracker_store[request_id] = tracker
     
-    background_tasks.add_task(run_compiler_pipeline, request.prompt, request.use_llm, request_id, tracker)
+    background_tasks.add_task(run_compiler_pipeline, request.prompt, request_id, tracker)
     
-    return JSONResponse({"request_id": request_id})
+    return JSONResponse({
+        "request_id": request_id,
+        "success": True
+    })
 
 @app.get("/compile-stream/{request_id}")
 async def compile_stream(request_id: str):
@@ -123,47 +125,89 @@ async def get_result(request_id: str):
         return JSONResponse({"error": "Still processing"}, status_code=202)
     return JSONResponse(tracker._result or {"error": "No result"})
 
-async def run_compiler_pipeline(prompt: str, use_llm: bool, request_id: str, tracker: ProgressTracker):
+async def run_compiler_pipeline(prompt: str, request_id: str, tracker: ProgressTracker):
+    stage_timings = {}
+    
     try:
-        await tracker.update_stage("intent_extraction", "started", "Analyzing request...")
-        intent = await asyncio.get_event_loop().run_in_executor(None, lambda: pipeline_llm.intent_extractor.extract(prompt) if use_llm else pipeline.intent_extractor.extract(prompt))
-        await tracker.update_stage("intent_extraction", "completed", f"Found {len(intent.get('entities', []))} entities")
+        t0 = time.time()
+        await tracker.update_stage("1_intent_extraction", "started", "Analyzing request...")
         
-        await tracker.update_stage("system_design", "started", "Designing architecture...")
-        design = await asyncio.get_event_loop().run_in_executor(None, lambda: pipeline_llm.system_designer.design(intent) if use_llm else pipeline.system_designer.design(intent))
-        await tracker.update_stage("system_design", "completed", f"Designed {len(design.get('pages', []))} pages")
+        intent = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: pipeline_llm.intent_extractor.extract_with_review(prompt)
+        )
+        intent_time = time.time() - t0
+        stage_timings["1_intent_extraction"] = round(intent_time, 2)
+        await tracker.update_stage("1_intent_extraction", "completed", f"Found {len(intent.get('entities', []))} entities, {len(intent.get('roles', []))} roles")
         
-        await tracker.update_stage("schema_generation", "started", "Generating schemas...")
-        schemas = await asyncio.get_event_loop().run_in_executor(None, lambda: pipeline_llm.schema_generator.generate(design) if use_llm else pipeline.schema_generator.generate(design))
-        await tracker.update_stage("schema_generation", "completed", "Schemas generated")
+        t1 = time.time()
+        await tracker.update_stage("2_system_design", "started", "Designing architecture...")
+        design = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: pipeline_llm.system_designer.design_llm(intent)
+        )
+        design_time = time.time() - t1
+        stage_timings["2_system_design"] = round(design_time, 2)
+        await tracker.update_stage("2_system_design", "completed", f"Designed {len(design.get('pages', []))} pages, {len(design.get('entities', []))} entities")
         
-        await tracker.update_stage("validation_repair", "started", "Validating...")
+        t2 = time.time()
+        await tracker.update_stage("3_schema_generation", "started", "Generating schemas...")
+        schemas = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: pipeline_llm.schema_generator.generate_llm(design)
+        )
+        schema_time = time.time() - t2
+        stage_timings["3_schema_generation"] = round(schema_time, 2)
+        await tracker.update_stage("3_schema_generation", "completed", f"Generated {len(schemas.get('db', {}).get('tables', {}))} tables, {len(schemas.get('api', {}).get('endpoints', []))} endpoints")
+        
+        t3 = time.time()
+        await tracker.update_stage("4_validation_refinement", "started", "Validating...")
         validation_errors = pipeline.validator.validate_cross_layer(design, schemas)
-        await tracker.update_stage("validation_repair", "completed", "Validation passed" if not validation_errors else f"{len(validation_errors)} warnings")
+        validation_time = time.time() - t3
+        stage_timings["4_validation_refinement"] = round(validation_time, 2)
         
-        await tracker.update_stage("simulation", "started", "Running simulation...")
+        issues_found = []
+        refinement_notes = []
+        
+        for err in validation_errors:
+            if any(keyword in err.lower() for keyword in ['undefined', 'missing', 'no']):
+                issues_found.append(f"[ERROR] {err}")
+            else:
+                refinement_notes.append(err)
+        
+        await tracker.update_stage("4_validation_refinement", "completed", "Validation passed" if not issues_found else f"{len(issues_found)} issues found")
+        
+        await tracker.update_stage("5_output", "started", "Finalizing...")
+        
         simulation = pipeline.simulator.simulate_execution(schemas)
-        await tracker.update_stage("simulation", "completed", "Simulation complete")
+        
+        total_time = time.time() - t0
         
         result = {
-            "success": simulation['can_execute'] and len(validation_errors) == 0,
+            "success": simulation.get('can_execute', True) and len([e for e in issues_found if '[ERROR]' in e]) == 0,
             "request_id": request_id,
             "intent": intent,
-            "design": design,
-            "schemas": schemas,
-            "validation": {"valid": len(validation_errors) == 0, "errors": validation_errors},
+            "system_design": design,
+            "db_schema": schemas.get("db", {}),
+            "api_schema": schemas.get("api", {}),
+            "ui_schema": schemas.get("ui", {}),
+            "auth_schema": schemas.get("auth", {}),
             "simulation_result": simulation,
-            "metrics": {"stages": {}},
-            "latency_ms": 0,
-            "stage_errors": []
+            "issues_found": issues_found,
+            "refinement_notes": refinement_notes,
+            "assumptions": intent.get("assumptions", []) + intent.get("ambiguities", []),
+            "metrics": {
+                "total_latency_seconds": round(total_time, 2),
+                "stage_timings": stage_timings,
+                "retries": 0
+            }
         }
         
         tracker._result = result
         
+        await tracker.update_stage("5_output", "completed", "Ready!")
+        
     except Exception as e:
         logger.error(f"Compilation failed: {e}")
-        await tracker.update_stage("intent_extraction", "error", str(e))
-        tracker._result = {"error": str(e)}
+        await tracker.update_stage("1_intent_extraction", "error", str(e))
+        tracker._result = {"error": str(e), "success": False}
 
 @app.get("/health")
 async def health():

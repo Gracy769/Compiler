@@ -1,82 +1,102 @@
 import time, logging, os, json, re
-from typing import Dict, Any, Tuple
+from typing import Tuple
 from openai import OpenAI
 
 logger = logging.getLogger("ai-compiler")
 
 NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY")
-BASE_URL = "https://integrate.api.nvidia.com/v1"
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
+GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 
 MODELS = {
-    "deepseek": "deepseek-ai/deepseek-v4-flash",
-    "minimax": "minimaxai/minimax-m2.7"
-}
-
-MAX_TOKENS = {
-    "deepseek": 16384,
-    "minimax": 16384
+    "grok": "llama-3.3-70b-versatile",
+    "review": "qwen/qwen3-32b"
 }
 
 MAX_RETRIES = 2
-RETRY_DELAY = 1
 
-_client = None
+_nvidia_client = None
+_groq_client = None
 
-def _get_client():
-    global _client
-    if _client is None:
+def _get_nvidia_client():
+    global _nvidia_client
+    if _nvidia_client is None:
         if not NVIDIA_API_KEY:
             raise RuntimeError("NVIDIA_API_KEY environment variable not set")
-        _client = OpenAI(base_url=BASE_URL, api_key=NVIDIA_API_KEY)
-    return _client
+        _nvidia_client = OpenAI(base_url=NVIDIA_BASE_URL, api_key=NVIDIA_API_KEY)
+    return _nvidia_client
 
-def _stream_response(messages: list, model: str, temperature: float, max_tokens: int) -> str:
-    completion = _get_client().chat.completions.create(
-        model=model,
-        messages=messages,
-        temperature=max(temperature, 0.01),
-        top_p=0.9,
-        max_tokens=max_tokens,
-        stream=True
-    )
-    output = []
-    for chunk in completion:
-        if getattr(chunk, "choices", None):
-            delta = chunk.choices[0].delta
-            if delta.content:
-                output.append(delta.content)
-    return "".join(output)
+def _get_groq_client():
+    global _groq_client
+    if _groq_client is None:
+        if not GROQ_API_KEY:
+            raise RuntimeError("GROQ_API_KEY environment variable not set")
+        _groq_client = OpenAI(base_url=GROQ_BASE_URL, api_key=GROQ_API_KEY)
+    return _groq_client
+
+def generate_with_grok(
+    prompt: str,
+    system_message: str,
+    max_tokens: int = 8192
+) -> str:
+    """Generate using Groq model - fast generation"""
+    model = MODELS["grok"]
+    
+    messages = [
+        {"role": "system", "content": system_message},
+        {"role": "user", "content": prompt}
+    ]
+    
+    try:
+        t0 = time.time()
+        client = _get_groq_client()
+        completion = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=0.02,
+            top_p=0.9,
+            max_tokens=max_tokens
+        )
+        result = completion.choices[0].message.content
+        logger.info(f"Grok generation: {len(result)} chars in {time.time()-t0:.1f}s")
+        return result
+    except Exception as e:
+        logger.error(f"Grok generation failed: {e}")
+        raise
 
 def review_with_minimax(
     draft: str,
     review_task: str,
     max_tokens: int = 8192
 ) -> Tuple[str, bool]:
-    """
-    MiniMax ONLY reviews and fixes the draft JSON.
-    Fast operation - ~10-30s
-    """
-    model = MODELS["minimax"]
+    """MiniMax reviews and fixes the draft JSON - fast ~10-30s"""
+    model = MODELS["review"]
     
-    review_system = f"""You are a JSON corrector. Your job is ONLY to fix errors, NOT regenerate.
-- Review the JSON below
-- Fix ONLY broken fields, missing values, wrong types  
-- Keep correct parts AS-IS
-- Output ONLY corrected JSON, no explanation
+    review_system = f"""You are a JSON corrector. Fix ONLY errors, keep correct parts AS-IS.
+Output ONLY corrected JSON, no explanation.
 
 TASK: {review_task}
 
 JSON TO REVIEW:
 {draft}
 
-Respond with ONLY the corrected JSON:"""
-    
-    review_messages = [{"role": "user", "content": "Fix this JSON if needed:"}]
-    full_messages = [{"role": "system", "content": review_system}] + review_messages
+Respond with ONLY corrected JSON:"""
     
     try:
         t0 = time.time()
-        corrected = _stream_response(full_messages, model, 0.02, max_tokens)
+        client = _get_nvidia_client()
+        completion = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": review_system},
+                {"role": "user", "content": "Fix this JSON:"}
+            ],
+            temperature=0.02,
+            top_p=0.9,
+            max_tokens=max_tokens
+        )
+        corrected = completion.choices[0].message.content
         corrected = repair_json(corrected)
         was_fixed = corrected.strip() != draft.strip()
         logger.info(f"MiniMax review: {len(corrected)} chars in {time.time()-t0:.1f}s, was_fixed={was_fixed}")
@@ -86,8 +106,10 @@ Respond with ONLY the corrected JSON:"""
         return draft, False
 
 def repair_json(text: str) -> str:
-    """Clean LLM output to valid JSON"""
-    from json_repair import repair_json as repair
+    try:
+        from json_repair import repair_json as repair
+    except ImportError:
+        def repair(t): return t
     
     text = text.strip()
     text = re.sub(r"```(?:json)?\s*", "", text).replace("```", "").strip()
